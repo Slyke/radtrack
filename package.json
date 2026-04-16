@@ -1,0 +1,21 @@
+{
+  "name": "radiacode-workspace",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "api",
+    "wui"
+  ],
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "npm run start --workspace api",
+    "dev": "npm run dev --workspace wui",
+    "dev:api": "npm run dev --workspace api",
+    "dev:wui": "npm run dev --workspace wui",
+    "build": "npm run build --workspace wui",
+    "check": "npm run check --workspace wui"
+  }
+}

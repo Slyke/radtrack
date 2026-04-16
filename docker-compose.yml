@@ -1,0 +1,24 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: radiacode
+      POSTGRES_PASSWORD: radiacode
+      POSTGRES_DB: radiacode
+    ports:
+      - '5432:5432'
+    volumes:
+      - radiacode-pg:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - '6379:6379'
+    volumes:
+      - radiacode-redis:/data
+
+volumes:
+  radiacode-pg:
+  radiacode-redis:
