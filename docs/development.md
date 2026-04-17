@@ -2,24 +2,42 @@
 
 ## Local Setup
 
-1. Copy the sample bootstrap files from `config/`.
-2. Set:
+1. Run `npm install`.
+2. Start the detached dev stack from the repo root:
+   - `npm run dev`
+3. Tail logs when needed:
+   - `npm run dev:logs`
+4. Stop the stack:
+   - `npm run dev:down`
+
+For direct host-side development without compose:
+
+1. Set:
    - `RADIACODE_CONFIG_PATH`
    - `RADIACODE_SECRETS_PATH`
-3. Ensure Postgres and Redis are reachable.
-4. Run `npm install`.
+2. Ensure Postgres and Redis are reachable.
+3. Run `npm run dev:local:api` and `npm run dev:local:wui`.
 
 ## Scripts
 
-- `npm run dev:api`: start the Node API
-- `npm run dev:wui`: start the Svelte dev server
+- `npm run dev`: build and start the detached development compose stack
+- `npm run dev:logs`: tail detached dev-stack logs
+- `npm run dev:down`: stop and remove the detached dev stack
+- `npm run dev:local:api`: start the Node API on the host
+- `npm run dev:local:wui`: start the Svelte dev server on the host
+- `npm run prod:up`: start the production-like local compose stack
+- `npm run prod:down`: stop the production-like local compose stack
 - `npm run build`: build the WUI for monolith or production serving
 - `npm run check`: run SvelteKit type and consistency checks
+
+The compose `up` scripts inject the current git short hash into the API and WUI as `RADIACODE_BUILD_COMMIT`, so container startup logs, health endpoints, and the WUI footer use the same build label format without needing `.git` inside the container.
 
 ## Verification Targets
 
 - API startup logs build label and enabled auth modes
-- `GET /health` responds with build label and dependency reachability
+- `GET /health` and `GET /healthz` on the API are unauthenticated and return `ok`, `message`, `version`, and `build`
+- `GET /health` and `GET /healthz` on the WUI are unauthenticated and return the same `ok`, `message`, `version`, and `build` shape
+- `GET /wui-health` remains available as a compatibility alias for the WUI
 - `GET /api/build` returns version, commit hash, and label
 - WUI shows the build label in the shell footer
 - single `.rctrk`, bulk `.rctrk`, `.zip`, and `.zrctrk` imports complete
@@ -29,4 +47,4 @@
 ## Current Notes
 
 - The original `backend/` and `frontend/` directories are legacy prototype code and are no longer the intended runtime path.
-- The current workspace is not itself a git repository, so local build labels fall back to `unknown` until the app runs inside a git checkout.
+- Compose-mounted dev and prod bootstrap files live under `config/compose/gui-api/`.

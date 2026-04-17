@@ -34,9 +34,44 @@ Implementation follows these local references in priority order:
 
 ```bash
 npm install
-npm run dev:api
-npm run dev:wui
+npm run dev
+npm run dev:logs
+npm run dev:down
+npm run dev:local:api
+npm run dev:local:wui
 npm run build
+```
+
+`npm run dev` now starts the detached development compose stack from the repository root.
+Both `npm run dev` and `npm run prod:up` inject the current git short hash into the containers so health responses and startup logs report the same build label format as the UI.
+
+## Compose Files
+
+- `docker-compose.dev.yml`: detached development stack for API, WUI, Postgres, and Redis
+- `docker-compose.yml`: production-like local stack for API, WUI, Postgres, and Redis
+
+The compose-mounted bootstrap config files live under `config/compose/gui-api/`, following the same pattern used in `../mqttctl`.
+
+## Health Endpoints
+
+- API:
+  - `GET /health`
+  - `GET /healthz`
+- WUI:
+  - `GET /health`
+  - `GET /healthz`
+  - `GET /wui-health` as a compatibility alias
+
+All return unauthenticated JSON in this shape:
+
+```json
+{
+  "ok": true,
+  "message": "ok",
+  "service": "radiacode-api",
+  "version": "0.0.1",
+  "build": "v0.0.1-<commit>"
+}
 ```
 
 ## Versioning

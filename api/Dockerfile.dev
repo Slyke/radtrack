@@ -1,0 +1,9 @@
+FROM node:24-bookworm-slim
+
+WORKDIR /workspace
+
+ENV NODE_ENV=development
+
+EXPOSE 8192
+
+CMD ["bash", "-lc", "npm install && npm run dev"]

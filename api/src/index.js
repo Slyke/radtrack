@@ -32,6 +32,15 @@ const sendJson = ({ res, status = 200, body }) => {
   res.status(status).json(body);
 };
 
+const toHealthBody = ({ service, buildInfo, extra = {} }) => ({
+  ok: true,
+  message: 'ok',
+  service,
+  version: buildInfo.version,
+  build: buildInfo.label,
+  ...extra
+});
+
 const applyCors = ({ app, runtimeConfig }) => {
   const allowedOrigins = new Set([
     runtimeConfig.app.wuiBaseUrl,
@@ -171,26 +180,38 @@ const main = async () => {
     next();
   });
 
+  app.get('/health', asyncHandler(async (_req, res) => {
+    sendJson({
+      res,
+      body: toHealthBody({
+        service: 'radiacode-api',
+        buildInfo,
+        extra: {
+          services: {
+            postgres: 'ready',
+            redis: 'ready'
+          }
+        }
+      })
+    });
+  }));
+
+  app.get('/healthz', asyncHandler(async (_req, res) => {
+    sendJson({
+      res,
+      body: toHealthBody({
+        service: 'radiacode-api',
+        buildInfo
+      })
+    });
+  }));
+
   app.use(asyncHandler(async (req, _res, next) => {
     req.auth = await authService.getAuthenticatedRequest({
       req,
       correlationId: req.correlationId
     });
     next();
-  }));
-
-  app.get('/health', asyncHandler(async (_req, res) => {
-    sendJson({
-      res,
-      body: {
-        ok: true,
-        build: buildInfo,
-        services: {
-          postgres: 'ready',
-          redis: 'ready'
-        }
-      }
-    });
   }));
 
   app.get('/api/build', asyncHandler(async (_req, res) => {

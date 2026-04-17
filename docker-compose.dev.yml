@@ -1,0 +1,76 @@
+services:
+  radiacode-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile.dev
+    container_name: radiacode-api-dev
+    working_dir: /workspace
+    command:
+      - bash
+      - -lc
+      - npm install && npm run dev
+    environment:
+      PORT: "8192"
+      TRUST_PROXY: "0"
+      MONOLITH: "false"
+      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
+      RADIACODE_CONFIG_PATH: /config/radiacode.config.json5
+      RADIACODE_SECRETS_PATH: /config/radiacode.secrets.json5
+      LOG_CONSOLE_FORMAT: text
+    volumes:
+      - ./api:/workspace
+      - radiacode-api-node-modules:/workspace/node_modules
+      - ./config/compose/gui-api:/config:ro
+    ports:
+      - "8192:8192"
+    depends_on:
+      - postgres
+      - redis
+    restart: unless-stopped
+
+  radiacode-wui:
+    image: node:24-bookworm-slim
+    container_name: radiacode-wui-dev
+    working_dir: /workspace
+    command:
+      - bash
+      - -lc
+      - npm install && npm run dev -- --host 0.0.0.0 --port 3000
+    environment:
+      PUBLIC_API_URL: http://localhost:8192
+      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./wui:/workspace
+      - radiacode-wui-node-modules:/workspace/node_modules
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16
+    container_name: radiacode-postgres-dev
+    environment:
+      POSTGRES_USER: radiacode
+      POSTGRES_PASSWORD: radiacode
+      POSTGRES_DB: radiacode
+    ports:
+      - "5432:5432"
+    volumes:
+      - radiacode-postgres-dev:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:7
+    container_name: radiacode-redis-dev
+    ports:
+      - "6379:6379"
+    volumes:
+      - radiacode-redis-dev:/data
+    restart: unless-stopped
+
+volumes:
+  radiacode-api-node-modules:
+  radiacode-wui-node-modules:
+  radiacode-postgres-dev:
+  radiacode-redis-dev:

@@ -1,8 +1,45 @@
-version: '3.9'
-
 services:
+  radiacode-api:
+    build:
+      context: ./api
+      dockerfile: Dockerfile
+    container_name: radiacode-api
+    hostname: radiacode-api
+    environment:
+      PORT: "8192"
+      TRUST_PROXY: "0"
+      MONOLITH: "false"
+      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
+      RADIACODE_CONFIG_PATH: /app/config/radiacode.config.json5
+      RADIACODE_SECRETS_PATH: /app/config/radiacode.secrets.json5
+      LOG_CONSOLE_FORMAT: text
+    volumes:
+      - ./config/compose/gui-api/radiacode.config.json5:/app/config/radiacode.config.json5:ro
+      - ./config/compose/gui-api/radiacode.secrets.json5:/app/config/radiacode.secrets.json5:ro
+    ports:
+      - "8192:8192"
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+
+  radiacode-wui:
+    build:
+      context: ./wui
+      dockerfile: Dockerfile
+      args:
+        PUBLIC_API_URL: http://localhost:8192
+    container_name: radiacode-wui
+    hostname: radiacode-wui
+    environment:
+      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
   postgres:
     image: postgres:16
+    container_name: radiacode-postgres
     environment:
       POSTGRES_USER: radiacode
       POSTGRES_PASSWORD: radiacode
@@ -10,15 +47,18 @@ services:
     ports:
       - '5432:5432'
     volumes:
-      - radiacode-pg:/var/lib/postgresql/data
+      - radiacode-postgres:/var/lib/postgresql/data
+    restart: unless-stopped
 
   redis:
     image: redis:7
+    container_name: radiacode-redis
     ports:
       - '6379:6379'
     volumes:
       - radiacode-redis:/data
+    restart: unless-stopped
 
 volumes:
-  radiacode-pg:
+  radiacode-postgres:
   radiacode-redis:

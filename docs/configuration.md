@@ -49,3 +49,9 @@ Mutable non-secret settings are seeded from bootstrap files into Postgres and th
 
 - [`../config/radiacode.config.example.json5`](../config/radiacode.config.example.json5)
 - [`../config/radiacode.secrets.example.json5`](../config/radiacode.secrets.example.json5)
+- [`../config/compose/gui-api/radiacode.config.example-localauth.json5`](../config/compose/gui-api/radiacode.config.example-localauth.json5)
+- [`../config/compose/gui-api/radiacode.secrets.example-localauth.json5`](../config/compose/gui-api/radiacode.secrets.example-localauth.json5)
+- [`../config/compose/gui-api/radiacode.config.example-oidc-localauth.json5`](../config/compose/gui-api/radiacode.config.example-oidc-localauth.json5)
+- [`../config/compose/gui-api/radiacode.secrets.example-oidc.json5`](../config/compose/gui-api/radiacode.secrets.example-oidc.json5)
+- [`../config/compose/gui-api/radiacode.config.json5`](../config/compose/gui-api/radiacode.config.json5)
+- [`../config/compose/gui-api/radiacode.secrets.json5`](../config/compose/gui-api/radiacode.secrets.json5)

@@ -1,0 +1,50 @@
+{
+  app: {
+    publicBaseUrl: "http://localhost:8192",
+    wuiBaseUrl: "http://localhost:3000",
+    basePath: ""
+  },
+  database: {
+    postgres: {
+      host: "postgres",
+      port: 5432,
+      database: "radiacode",
+      user: "radiacode"
+    }
+  },
+  redis: {
+    url: "redis://redis:6379"
+  },
+  auth: {
+    localEnabled: true,
+    oidcEnabled: false,
+    headerEnabled: false,
+    oidc: {
+      issuer: "",
+      clientId: "",
+      callbackUrl: "",
+      scopes: ["openid", "profile", "email"]
+    },
+    header: {
+      trustedCidrs: [],
+      usernameHeader: "x-auth-request-user",
+      emailHeader: "x-auth-request-email"
+    }
+  },
+  ui: {
+    defaultTheme: "dark",
+    defaultFont: "ui-mono"
+  },
+  map: {
+    tileUrlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+    attribution: "&copy; OpenStreetMap contributors",
+    defaultMetric: "dose_rate",
+    defaultAggregateShape: "hexagon",
+    defaultCellSizeMeters: 250,
+    rawPointCap: 5000
+  },
+  aggregation: {
+    modeBucketDecimals: 2,
+    cacheTtlSeconds: 3600
+  }
+}

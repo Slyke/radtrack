@@ -1,9 +1,15 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
 
+export interface BuildInfo {
+  version: string;
+  commitHash: string;
+  label: string;
+}
+
 const rootDir = path.resolve(process.cwd());
 
-const resolveGitDir = ({ startDir }) => {
+const resolveGitDir = ({ startDir }: { startDir: string }) => {
   let currentDir = startDir;
 
   for (;;) {
@@ -29,7 +35,7 @@ const resolveGitDir = ({ startDir }) => {
   }
 };
 
-const resolveHeadCommit = ({ gitDir }) => {
+const resolveHeadCommit = ({ gitDir }: { gitDir: string | null }) => {
   if (!gitDir) {
     return null;
   }
@@ -80,7 +86,7 @@ const resolveVersion = () => {
   }
 
   try {
-    const parsed = JSON.parse(readFileSync(packagePath, 'utf8'));
+    const parsed = JSON.parse(readFileSync(packagePath, 'utf8')) as { version?: unknown };
     if (typeof parsed.version === 'string' && parsed.version.trim()) {
       return parsed.version.trim();
     }
@@ -89,7 +95,7 @@ const resolveVersion = () => {
   return '0.0.0';
 };
 
-let cachedBuildInfo = null;
+let cachedBuildInfo: BuildInfo | null = null;
 
 export const getBuildInfo = () => {
   if (cachedBuildInfo) {
@@ -106,4 +112,15 @@ export const getBuildInfo = () => {
     label: `v${version}-${commitHash}`
   };
   return cachedBuildInfo;
+};
+
+export const toHealthBody = ({ service }: { service: string }) => {
+  const buildInfo = getBuildInfo();
+  return {
+    ok: true,
+    message: 'ok',
+    service,
+    version: buildInfo.version,
+    build: buildInfo.label
+  };
 };
