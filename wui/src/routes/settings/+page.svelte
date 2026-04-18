@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import { localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
 
   let bootstrapInfo = $state<any>(null);
@@ -10,13 +11,19 @@
   let updatesJson = $state('{\n  "map.defaultMetric": "dose_rate"\n}');
   let errorMessage = $state<string | null>(null);
 
+  const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
+    key,
+    values,
+    messages: $localeStore.messages
+  });
+
   const loadSettings = async () => {
     try {
       const response = await apiFetch<any>({ path: '/api/settings' });
       bootstrapInfo = response.bootstrap;
       settings = response.settings;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Failed to load settings';
+      errorMessage = error instanceof Error ? error.message : t('radiacode-settings_failed_load');
     }
   };
 
@@ -36,7 +43,7 @@
       });
       await loadSettings();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Failed to save settings';
+      errorMessage = error instanceof Error ? error.message : t('radiacode-settings_failed_save');
     }
   };
 
@@ -45,8 +52,8 @@
 
 <div class="page-header">
   <div>
-    <h1>Settings</h1>
-    <p class="muted">Bootstrap auth flags stay file-driven. Mutable runtime settings are DB-backed.</p>
+    <h1>{t('radiacode-settings_title')}</h1>
+    <p class="muted">{t('radiacode-settings_description')}</p>
   </div>
 </div>
 
@@ -58,28 +65,28 @@
 
 <section class="grid cols-2">
   <article class="panel">
-    <h2>Bootstrap</h2>
+    <h2>{t('radiacode-settings_bootstrap-title')}</h2>
     <pre>{JSON.stringify(bootstrapInfo, null, 2)}</pre>
   </article>
 
   <article class="panel">
-    <h2>Update Settings</h2>
+    <h2>{t('radiacode-settings_update-title')}</h2>
     <div class="form-grid">
       <textarea bind:value={updatesJson}></textarea>
-      <button class="primary" onclick={saveSettings}>Save</button>
+      <button class="primary" onclick={saveSettings}>{t('radiacode-common_save-button')}</button>
     </div>
   </article>
 </section>
 
 <section class="panel">
-  <h2>Current Runtime Settings</h2>
+  <h2>{t('radiacode-settings_current_runtime-title')}</h2>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Key</th>
-          <th>Value</th>
-          <th>Source</th>
+          <th>{t('radiacode-common_name-label')}</th>
+          <th>{t('radiacode-common_value-label')}</th>
+          <th>{t('radiacode-common_source-label')}</th>
         </tr>
       </thead>
       <tbody>

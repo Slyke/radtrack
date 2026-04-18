@@ -8,36 +8,84 @@
   import '$lib/styles/app.css';
   import { bootstrapSession, sessionStore } from '$lib/stores/session';
   import { changePassword, logout } from '$lib/api/client';
+  import { localeStore, setLocale, translateMessage } from '$lib/i18n';
 
   const { children } = $props();
+  const sidebarStorageKey = 'radiacode.sidebar.open';
 
   const navigation = [
-    { href: '/dashboard', label: 'Dashboard' },
-    { href: '/import', label: 'Import' },
-    { href: '/datasets', label: 'Datasets' },
-    { href: '/map', label: 'Map' },
-    { href: '/combined', label: 'Combined' },
-    { href: '/export', label: 'Export' },
-    { href: '/users', label: 'Users', roles: ['moderator', 'admin'] },
-    { href: '/settings', label: 'Settings', roles: ['admin'] }
+    { href: '/dashboard', labelKey: 'radiacode-layout_nav-dashboard-label' },
+    { href: '/import', labelKey: 'radiacode-layout_nav-import-label' },
+    { href: '/datasets', labelKey: 'radiacode-layout_nav-datasets-label' },
+    { href: '/map', labelKey: 'radiacode-layout_nav-map-label' },
+    { href: '/combined', labelKey: 'radiacode-layout_nav-combined-label' },
+    { href: '/export', labelKey: 'radiacode-layout_nav-export-label' },
+    { href: '/audit', labelKey: 'radiacode-layout_nav-audit-label' },
+    { href: '/users', labelKey: 'radiacode-layout_nav-users-label', roles: ['moderator', 'admin'] },
+    { href: '/settings', labelKey: 'radiacode-layout_nav-settings-label', roles: ['admin'] }
   ];
 
   let bootstrapError = $state<string | null>(null);
+  let sidebarOpen = $state(true);
   let passwordForm = $state({
-    currentPassword: '',
-    newPassword: ''
+    newPassword: '',
+    confirmPassword: ''
   });
   let passwordMessage = $state<string | null>(null);
   let passwordBusy = $state(false);
 
+  const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
+    key,
+    values,
+    messages: $localeStore.messages
+  });
+
+  const isAuthRoute = $derived(
+    $page.url.pathname === '/login'
+    || $page.url.pathname === '/auth-error'
+  );
+
+  const isLoginRoute = $derived($page.url.pathname === '/login');
+  const isMapRoute = $derived($page.url.pathname === '/map');
+
+  const requiresPasswordReset = $derived(
+    $sessionStore.authenticated
+    && Boolean($sessionStore.user?.mustChangePassword)
+  );
+
   const showShell = $derived(
     $sessionStore.authenticated
-    && $page.url.pathname !== '/login'
-    && $page.url.pathname !== '/auth-error'
+    && !requiresPasswordReset
+    && !isAuthRoute
   );
 
   const visibleNavigation = $derived(
     navigation.filter((entry) => !entry.roles || entry.roles.includes($sessionStore.user?.role ?? 'view_only'))
+  );
+
+  const loadSidebarState = () => {
+    if (!browser) {
+      return;
+    }
+
+    const storedValue = window.localStorage.getItem(sidebarStorageKey);
+    sidebarOpen = storedValue === null ? true : storedValue !== 'false';
+  };
+
+  const persistSidebarState = () => {
+    if (!browser) {
+      return;
+    }
+
+    window.localStorage.setItem(sidebarStorageKey, String(sidebarOpen));
+  };
+
+  const isActive = (href: string) => (
+    $page.url.pathname === href
+    || (
+      href !== '/dashboard'
+      && $page.url.pathname.startsWith(`${href}/`)
+    )
   );
 
   const applyUi = () => {
@@ -47,6 +95,8 @@
 
     document.documentElement.dataset.theme = $sessionStore.ui.theme || 'dark';
     document.documentElement.dataset.font = $sessionStore.ui.font || 'ui-mono';
+    document.documentElement.lang = $sessionStore.ui.language || 'en-US';
+    setLocale({ language: $sessionStore.ui.language });
   };
 
   const handleLogout = async () => {
@@ -55,8 +105,25 @@
     await goto('/login');
   };
 
-  const submitPasswordChange = async () => {
+  const toggleSidebar = () => {
+    sidebarOpen = !sidebarOpen;
+    persistSidebarState();
+  };
+
+  const submitPasswordChange = async (event?: Event) => {
+    event?.preventDefault();
+
     if (!$sessionStore.csrf) {
+      return;
+    }
+
+    if (!passwordForm.newPassword) {
+      passwordMessage = t('radiacode-layout_password_update_failed');
+      return;
+    }
+
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      passwordMessage = t('radiacode-layout_password_mismatch');
       return;
     }
 
@@ -65,17 +132,16 @@
     try {
       await changePassword({
         csrf: $sessionStore.csrf,
-        currentPassword: passwordForm.currentPassword,
         newPassword: passwordForm.newPassword
       });
       passwordForm = {
-        currentPassword: '',
-        newPassword: ''
+        newPassword: '',
+        confirmPassword: ''
       };
-      passwordMessage = 'Password updated. Sign in again if prompted.';
+      passwordMessage = t('radiacode-layout_password_updated');
       await bootstrapSession();
     } catch (error) {
-      passwordMessage = error instanceof Error ? error.message : 'Password update failed';
+      passwordMessage = error instanceof Error ? error.message : t('radiacode-layout_password_update_failed');
     } finally {
       passwordBusy = false;
     }
@@ -83,10 +149,11 @@
 
   onMount(async () => {
     try {
+      loadSidebarState();
       await bootstrapSession();
       applyUi();
     } catch (error) {
-      bootstrapError = error instanceof Error ? error.message : 'Failed to bootstrap session.';
+      bootstrapError = error instanceof Error ? error.message : t('radiacode-layout_bootstrap_error-description');
     }
   });
 
@@ -109,71 +176,110 @@
 </script>
 
 <svelte:head>
-  <title>Radiacode</title>
+  <title>{t('radiacode-app_title')}</title>
 </svelte:head>
 
 {#if bootstrapError}
   <main class="content narrow">
     <section class="panel">
-      <h1>Bootstrap Error</h1>
+      <h1>{t('radiacode-common_error-bootstrap')}</h1>
       <p class="muted">{bootstrapError}</p>
     </section>
   </main>
 {:else if showShell}
-  <div class="shell">
-    <aside class="sidebar">
-      <div>
-        <h2>Radiacode</h2>
-        <p class="muted">Tracks, maps, sharing, export.</p>
-      </div>
-
-      <div class="chip-row">
-        <span class="chip start">{$sessionStore.user?.username}</span>
-        <span class="chip mid">{$sessionStore.user?.role}</span>
-      </div>
-
-      <nav class="nav-list">
-        {#each visibleNavigation as item}
-          <a
-            class:active={$page.url.pathname === item.href}
-            class="nav-link"
-            href={item.href}
-          >
-            {item.label}
-          </a>
-        {/each}
-      </nav>
-
-      {#if $sessionStore.user?.mustChangePassword}
-        <section class="panel">
-          <h3>Password Change Required</h3>
-          <p class="muted">Local-password users and bootstrap admins must rotate passwords on first login.</p>
-          <div class="form-grid">
-            <input bind:value={passwordForm.currentPassword} placeholder="Current password" type="password" />
-            <input bind:value={passwordForm.newPassword} placeholder="New password" type="password" />
-            <button class="warning" disabled={passwordBusy} onclick={submitPasswordChange}>Update password</button>
-            {#if passwordMessage}
-              <p class="muted">{passwordMessage}</p>
-            {/if}
+  <div class:sidebar-collapsed={!sidebarOpen} class="shell">
+    <aside class="sidebar-shell">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <div>
+            <h2>{t('radiacode-app_title')}</h2>
+            <p class="muted">{t('radiacode-layout_shell-description')}</p>
           </div>
-        </section>
-      {/if}
+          <button
+            aria-label={t('radiacode-layout_collapse_nav-button')}
+            aria-expanded={sidebarOpen}
+            class="sidebar-toggle"
+            onclick={toggleSidebar}
+            type="button"
+          >
+            &lt;
+          </button>
+        </div>
 
-      <div class="sidebar-footer grid">
-        <button onclick={handleLogout}>Logout</button>
-        <div>
-          <div class="faint">Build</div>
-          <code>{$sessionStore.build?.label ?? 'v0.0.1-unknown'}</code>
+        <div class="chip-row">
+          <span class="chip start">{t('radiacode-common_user-label')}: {$sessionStore.user?.username}</span>
+          <span class="chip mid">{t('radiacode-common_group-label')}: {$sessionStore.user?.role}</span>
+        </div>
+
+        <nav class="nav-list">
+          {#each visibleNavigation as item}
+            <a
+              class:active={isActive(item.href)}
+              class="nav-link"
+              href={item.href}
+            >
+              {t(item.labelKey)}
+            </a>
+          {/each}
+        </nav>
+
+        <div class="sidebar-footer grid">
+          <button class="danger" onclick={handleLogout}>{t('radiacode-common_logout-button')}</button>
+          <div>
+            <div class="faint">{t('radiacode-common_build-label')}</div>
+            <code>{$sessionStore.build?.label ?? 'v0.0.1-unknown'}</code>
+          </div>
         </div>
       </div>
     </aside>
 
-    <main class="content wide">
+    {#if !sidebarOpen}
+      <button
+        aria-label={t('radiacode-layout_expand_nav-button')}
+        aria-expanded={sidebarOpen}
+        class="sidebar-toggle sidebar-toggle-floating"
+        onclick={toggleSidebar}
+        type="button"
+      >
+        &gt;
+      </button>
+    {/if}
+
+    <main class:map-content={isMapRoute} class="content wide">
       {@render children()}
     </main>
   </div>
+{:else if requiresPasswordReset}
+  <main class="content password-reset-view">
+    <section class="panel password-reset-panel">
+      <form class="form-grid" onsubmit={submitPasswordChange}>
+        <div>
+          <div class="faint">{t('radiacode-app_title')}</div>
+          <h1>{t('radiacode-layout_password_change_required-title')}</h1>
+          <p class="muted">{t('radiacode-layout_must_change_password-description')}</p>
+        </div>
+
+        <div class="chip-row">
+          <span class="chip start">{t('radiacode-common_user-label')}: {$sessionStore.user?.username}</span>
+          <span class="chip mid">{t('radiacode-common_group-label')}: {$sessionStore.user?.role}</span>
+        </div>
+
+        <input bind:value={passwordForm.newPassword} placeholder={t('radiacode-common_new_password-placeholder')} type="password" />
+        <input bind:value={passwordForm.confirmPassword} placeholder={t('radiacode-common_confirm_new_password-placeholder')} type="password" />
+
+        <div class="actions">
+          <button class="warning" disabled={passwordBusy} type="submit">{t('radiacode-common_update_password-button')}</button>
+          <button class="danger" disabled={passwordBusy} onclick={handleLogout} type="button">{t('radiacode-common_logout-button')}</button>
+        </div>
+
+        {#if passwordMessage}
+          <p class="muted">{passwordMessage}</p>
+        {/if}
+      </form>
+    </section>
+  </main>
 {:else}
-  <main class="content narrow">
+  <main class:login-screen={isLoginRoute} class="content narrow">
     {@render children()}
   </main>
 {/if}

@@ -32,9 +32,10 @@ services:
     container_name: radiacode-wui
     hostname: radiacode-wui
     environment:
+      PORT: "4096"
       RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
     ports:
-      - "3000:3000"
+      - "4096:4096"
     restart: unless-stopped
 
   postgres:

@@ -79,14 +79,18 @@ export const ensureSameOrigin = ({ req, runtimeConfig, correlationId }) => {
     return;
   }
 
-  const allowedOrigin = runtimeConfig.app.publicBaseUrl;
-  if (origin !== allowedOrigin) {
+  const allowedOrigins = new Set([
+    runtimeConfig.app.publicBaseUrl,
+    runtimeConfig.app.wuiBaseUrl
+  ]);
+
+  if (!allowedOrigins.has(origin)) {
     throw createAppError({
       caller: 'http::ensureSameOrigin',
       reason: 'Origin is not allowed for this request.',
       errorKey: 'AUTH_CSRF_INVALID',
       correlationId,
-      context: { origin, allowedOrigin },
+      context: { origin, allowedOrigins: Array.from(allowedOrigins) },
       status: 403
     });
   }

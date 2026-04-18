@@ -2,6 +2,7 @@
 
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import { localeStore, translateMessage } from '$lib/i18n';
   import { bootstrapSession, sessionStore } from '$lib/stores/session';
   import { localLogin, startOidcLogin } from '$lib/api/client';
 
@@ -9,6 +10,12 @@
   let password = $state('');
   let errorMessage = $state<string | null>(null);
   let busy = $state(false);
+
+  const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
+    key,
+    values,
+    messages: $localeStore.messages
+  });
 
   const submit = async () => {
     busy = true;
@@ -18,44 +25,56 @@
       await bootstrapSession();
       await goto('/dashboard');
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Login failed';
+      errorMessage = error instanceof Error ? error.message : t('radiacode-login_failed');
     } finally {
       busy = false;
     }
   };
 </script>
 
-<div class="page-header">
-  <div>
-    <h1>Login</h1>
-    <p class="muted">Local login is app-owned. OIDC and trusted-header auth link back to local DB users.</p>
-  </div>
-  <code>{$sessionStore.build?.label ?? 'v0.0.1-unknown'}</code>
-</div>
+<div class="login-shell">
+  <section class="panel login-card">
+    <div class="page-header">
+      <div>
+        <h1>{t('radiacode-login_title')}</h1>
+        <p class="muted">{t('radiacode-login_description')}</p>
+      </div>
+      <code>{$sessionStore.build?.label ?? 'v0.0.1-unknown'}</code>
+    </div>
 
-<section class="panel">
-  <div class="form-grid">
-    <label>
-      <div class="muted">Username</div>
-      <input bind:value={username} autocomplete="username" />
-    </label>
-    <label>
-      <div class="muted">Password</div>
-      <input bind:value={password} autocomplete="current-password" type="password" />
-    </label>
-    <div class="actions">
+    <div class="form-grid">
       {#if $sessionStore.authModes.local}
-        <button class="primary" disabled={busy} onclick={submit}>Sign in locally</button>
+        <form class="form-grid" onsubmit={(event) => {
+          event.preventDefault();
+          submit();
+        }}>
+          <label>
+            <div class="muted">{t('radiacode-common_username-label')}</div>
+            <input bind:value={username} autocomplete="username" />
+          </label>
+          <label>
+            <div class="muted">{t('radiacode-common_password-label')}</div>
+            <input bind:value={password} autocomplete="current-password" type="password" />
+          </label>
+          <div class="actions">
+            <button class="primary" disabled={busy} type="submit">{t('radiacode-common_sign_in_locally-button')}</button>
+          </div>
+        </form>
       {/if}
+
       {#if $sessionStore.authModes.oidc}
-        <button class="mid" onclick={() => startOidcLogin({ redirectTo: '/dashboard' })}>Continue with OIDC</button>
+        <div class="actions">
+          <button class="mid" onclick={() => startOidcLogin({ redirectTo: '/dashboard' })}>{t('radiacode-login_continue_oidc-button')}</button>
+        </div>
+      {/if}
+
+      {#if $sessionStore.authModes.header}
+        <p class="muted">{t('radiacode-login_header_auth-description')}</p>
+      {/if}
+
+      {#if errorMessage}
+        <p class="muted">{errorMessage}</p>
       {/if}
     </div>
-    {#if $sessionStore.authModes.header}
-      <p class="muted">Trusted reverse-proxy auth is enabled. If upstream auth already succeeded, refreshing this page should establish access automatically.</p>
-    {/if}
-    {#if errorMessage}
-      <p class="muted">{errorMessage}</p>
-    {/if}
-  </div>
-</section>
+  </section>
+</div>

@@ -22,7 +22,8 @@ COPY --from=build /app/package.json ./package.json
 RUN npm install --omit=dev
 
 ENV NODE_ENV=production
+ENV PORT=4096
 
-EXPOSE 3000
+EXPOSE 4096
 
 CMD ["node", "build"]

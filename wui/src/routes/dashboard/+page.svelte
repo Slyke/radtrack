@@ -3,16 +3,28 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
 
   let data = $state<any>(null);
   let errorMessage = $state<string | null>(null);
+
+  const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
+    key,
+    values,
+    messages: $localeStore.messages
+  });
+
+  const formatTime = (value: string | null | undefined) => formatDateTime({
+    value,
+    language: $localeStore.language
+  }) ?? t('radiacode-common_none');
 
   const loadDashboard = async () => {
     try {
       const response = await apiFetch<any>({ path: '/api/dashboard' });
       data = response;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Failed to load dashboard';
+      errorMessage = error instanceof Error ? error.message : t('radiacode-dashboard_failed');
     }
   };
 
@@ -21,8 +33,8 @@
 
 <div class="page-header">
   <div>
-    <h1>Dashboard</h1>
-    <p class="muted">Uploads, datasets, and recent audit activity.</p>
+    <h1>{t('radiacode-dashboard_title')}</h1>
+    <p class="muted">{t('radiacode-dashboard_description')}</p>
   </div>
 </div>
 
@@ -32,20 +44,20 @@
   </section>
 {:else if !data}
   <section class="panel">
-    <p class="muted">Loading dashboard…</p>
+    <p class="muted">{t('radiacode-common_loading_dashboard')}</p>
   </section>
 {:else}
   <section class="grid cols-3">
     <article class="metric-card">
-      <div class="faint">Datasets</div>
+      <div class="faint">{t('radiacode-datasets_title')}</div>
       <h2>{data.stats.datasetCount}</h2>
     </article>
     <article class="metric-card">
-      <div class="faint">Uploads</div>
+      <div class="faint">{t('radiacode-dashboard_recent_uploads-title')}</div>
       <h2>{data.stats.uploadCount}</h2>
     </article>
     <article class="metric-card">
-      <div class="faint">Failed Imports</div>
+      <div class="faint">{t('radiacode-dashboard_failed_imports-label')}</div>
       <h2>{data.stats.failedImportCount}</h2>
     </article>
   </section>
@@ -53,16 +65,16 @@
   <section class="grid cols-2">
     <article class="panel">
       <div class="page-header">
-        <h2>Recent Datasets</h2>
-        <a href="/datasets">Open</a>
+        <h2>{t('radiacode-dashboard_recent_datasets-title')}</h2>
+        <a href="/datasets">{t('radiacode-common_open-button')}</a>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Access</th>
-              <th>Tracks</th>
+              <th>{t('radiacode-common_name-label')}</th>
+              <th>{t('radiacode-common_access-label')}</th>
+              <th>{t('radiacode-common_tracks-label')}</th>
             </tr>
           </thead>
           <tbody>
@@ -80,16 +92,16 @@
 
     <article class="panel">
       <div class="page-header">
-        <h2>Recent Uploads</h2>
-        <a href="/import">Import</a>
+        <h2>{t('radiacode-dashboard_recent_uploads-title')}</h2>
+        <a href="/import">{t('radiacode-common_import-button')}</a>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>File</th>
-              <th>Status</th>
-              <th>Time</th>
+              <th>{t('radiacode-common_file-label')}</th>
+              <th>{t('radiacode-common_status-label')}</th>
+              <th>{t('radiacode-common_time-label')}</th>
             </tr>
           </thead>
           <tbody>
@@ -97,7 +109,7 @@
               <tr>
                 <td>{upload.originalFilename}</td>
                 <td>{upload.status}</td>
-                <td>{new Date(upload.uploadedAt).toLocaleString()}</td>
+                <td>{formatTime(upload.uploadedAt)}</td>
               </tr>
             {/each}
           </tbody>
@@ -108,21 +120,22 @@
 
   <section class="panel">
     <div class="page-header">
-      <h2>Audit</h2>
+      <h2>{t('radiacode-audit_title')}</h2>
+      <a href="/audit">{t('radiacode-common_open-button')}</a>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>Time</th>
-            <th>Event</th>
-            <th>Entity</th>
+            <th>{t('radiacode-common_time-label')}</th>
+            <th>{t('radiacode-common_event-label')}</th>
+            <th>{t('radiacode-common_entity-label')}</th>
           </tr>
         </thead>
         <tbody>
           {#each data.audit as event}
             <tr>
-              <td>{new Date(event.createdAt).toLocaleString()}</td>
+              <td>{formatTime(event.createdAt)}</td>
               <td>{event.eventType}</td>
               <td>{event.entityType}</td>
             </tr>

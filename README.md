@@ -3,7 +3,7 @@
 Radiacode track import and mapping app built as two deployables:
 
 - `api/`: Node.js control plane for auth, imports, Postgres persistence, Redis-backed aggregate caching, exports, moderation, and optional monolith frontend serving
-- `wui/`: Svelte 5 web UI for login, imports, datasets, map exploration, exports, and administration
+- `wui/`: Svelte 5 web UI for login, imports, live track ingest keys, datasets, map exploration, exports, audit history, and administration
 
 ## Documentation Map
 
@@ -29,6 +29,7 @@ Implementation follows these local references in priority order:
 - Redis is used for aggregate cache entries
 - UI and API run separately by default
 - API can serve the built UI in monolith mode
+- Tracks can be created from imported files or as live ingest targets with per-track API keys
 
 ## Workspace Commands
 

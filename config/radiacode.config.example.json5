@@ -1,7 +1,7 @@
 {
   app: {
     publicBaseUrl: "http://localhost:8192",
-    wuiBaseUrl: "http://localhost:3000",
+    wuiBaseUrl: "http://localhost:4096",
     basePath: ""
   },
   database: {
@@ -33,7 +33,8 @@
   },
   ui: {
     defaultTheme: "dark",
-    defaultFont: "ui-mono"
+    defaultFont: "ui-mono",
+    defaultLanguage: "en-US"
   },
   map: {
     tileUrlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",

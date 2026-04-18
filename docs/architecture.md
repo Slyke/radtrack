@@ -11,7 +11,7 @@ Default deployment runs them separately. Monolith mode lets the API serve the bu
 
 ## Storage Model
 
-- Postgres stores users, auth identities, sessions, audit events, raw uploaded blobs, datasets, shares, tracks, readings, exclude areas, combined datasets, and runtime settings.
+- Postgres stores users, auth identities, sessions, audit events, raw uploaded blobs, datasets, shares, tracks, track ingest keys, readings, exclude areas, combined datasets, and runtime settings.
 - Redis stores aggregate query result caches with read-refresh TTL behavior.
 - Temporary filesystem use is allowed only during request processing and is not relied on for durable storage.
 
@@ -38,6 +38,15 @@ Default deployment runs them separately. Monolith mode lets the API serve the bu
    - derive track date ranges
    - link or create per-user device records
    - invalidate related aggregate cache entries
+
+## Live Ingest Model
+
+- Tracks may also be created as `live` tracks inside existing datasets.
+- Each live track gets a short per-owner ingest id used by `POST /api/ingest/tracks/:ingestTrackId/points`.
+- One live track can have multiple generated API keys, but each key belongs to only one track.
+- API keys are stored hashed, exposed in plaintext only once at creation or rotation time, and can be revoked or rotated independently.
+- Ingested points store both the sender timestamp (`occurredAt`) and the server acceptance timestamp (`receivedAt`).
+- Scoped audit events capture ingest key lifecycle actions and rejected ingest attempts.
 
 ## Query Model
 

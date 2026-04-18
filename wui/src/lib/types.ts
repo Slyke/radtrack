@@ -9,6 +9,7 @@ export interface AuthUser {
 export interface UiConfig {
   theme: string;
   font: string;
+  language: string;
   tileUrlTemplate: string;
   attribution: string;
   defaultMetric: string;

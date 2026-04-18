@@ -98,7 +98,7 @@ export const createDatasetService = ({ db, audit }) => {
 
   const getDatasetDetail = async ({ datasetId, user, correlationId = null }) => {
     const dataset = await getDatasetAccess({ datasetId, user, correlationId });
-    const [tracksResult, sharesResult, excludeAreasResult] = await Promise.all([
+    const [tracksResult, sharesResult, excludeAreasResult, focusPointResult] = await Promise.all([
       db.query(
         `SELECT *
          FROM tracks
@@ -120,8 +120,22 @@ export const createDatasetService = ({ db, audit }) => {
          WHERE dataset_id = $1
          ORDER BY created_at DESC`,
         [datasetId]
+      ),
+      db.query(
+        `SELECT
+           r.latitude,
+           r.longitude
+         FROM tracks t
+         JOIN readings r ON r.track_id = t.id
+         WHERE t.dataset_id = $1
+           AND r.latitude IS NOT NULL
+           AND r.longitude IS NOT NULL
+         ORDER BY t.created_at DESC, r.row_number ASC, r.created_at ASC
+         LIMIT 1`,
+        [datasetId]
       )
     ]);
+    const focusPoint = focusPointResult.rows[0] ?? null;
 
     return {
       id: dataset.id,
@@ -134,6 +148,8 @@ export const createDatasetService = ({ db, audit }) => {
       tracks: tracksResult.rows.map((row) => ({
         id: row.id,
         rawFileId: row.raw_file_id,
+        sourceType: row.source_type,
+        ingestTrackId: row.ingest_track_id,
         trackName: row.track_name,
         deviceIdentifierRaw: row.device_identifier_raw,
         rowCount: row.row_count,
@@ -157,12 +173,21 @@ export const createDatasetService = ({ db, audit }) => {
         id: row.id,
         datasetId: row.dataset_id,
         shapeType: row.shape_type,
+        effectType: row.effect_type,
+        compressMinPoints: row.compress_min_points,
+        compressMaxPoints: row.compress_max_points,
         geometry: row.geometry_json,
         label: row.label,
         applyByDefaultOnExport: row.apply_by_default_on_export,
         createdByUserId: row.created_by_user_id,
         createdAt: row.created_at
-      }))
+      })),
+      mapFocusPoint: focusPoint
+        ? {
+            latitude: focusPoint.latitude,
+            longitude: focusPoint.longitude
+          }
+        : null
     };
   };
 
@@ -326,10 +351,16 @@ export const createDatasetService = ({ db, audit }) => {
 
   const listCombinedDatasets = async ({ user }) => {
     const result = await db.query(
-      `SELECT *
-       FROM combined_datasets
-       WHERE owner_user_id = $1 OR $2 = 'admin'
-       ORDER BY updated_at DESC`,
+      `SELECT
+         cd.*,
+         (
+           SELECT COUNT(*)
+           FROM combined_dataset_members member
+           WHERE member.combined_dataset_id = cd.id
+         ) AS member_count
+       FROM combined_datasets cd
+       WHERE cd.owner_user_id = $1 OR $2 = 'admin'
+       ORDER BY cd.updated_at DESC`,
       [user.id, user.role]
     );
 
@@ -338,6 +369,7 @@ export const createDatasetService = ({ db, audit }) => {
       ownerUserId: row.owner_user_id,
       name: row.name,
       description: row.description,
+      memberCount: Number(row.member_count ?? 0),
       createdAt: row.created_at,
       updatedAt: row.updated_at
     }));
@@ -513,6 +545,9 @@ export const createDatasetService = ({ db, audit }) => {
     geometry,
     label = null,
     applyByDefaultOnExport = false,
+    effectType = 'hard_remove',
+    compressMinPoints = null,
+    compressMaxPoints = null,
     correlationId = null
   }) => {
     const dataset = await getDatasetAccess({ datasetId, user, correlationId });
@@ -536,11 +571,68 @@ export const createDatasetService = ({ db, audit }) => {
       });
     }
 
+    if (!['hard_remove', 'compress'].includes(effectType)) {
+      throw createAppError({
+        caller: 'datasets::createExcludeArea',
+        reason: 'Exclude area effect type must be hard_remove or compress.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    const normalizedCompressMinPoints = compressMinPoints === null || compressMinPoints === undefined
+      ? null
+      : Number(compressMinPoints);
+    const normalizedCompressMaxPoints = compressMaxPoints === null || compressMaxPoints === undefined
+      ? null
+      : Number(compressMaxPoints);
+
+    if (effectType === 'compress') {
+      if (
+        !Number.isInteger(normalizedCompressMinPoints)
+        || !Number.isInteger(normalizedCompressMaxPoints)
+        || normalizedCompressMinPoints < 0
+        || normalizedCompressMaxPoints < normalizedCompressMinPoints
+      ) {
+        throw createAppError({
+          caller: 'datasets::createExcludeArea',
+          reason: 'Compress exclude areas require a valid min/max point range.',
+          errorKey: 'REQUEST_INVALID',
+          correlationId,
+          status: 400
+        });
+      }
+    }
+
     const excludeAreaId = createOpaqueId();
     await db.query(
-      `INSERT INTO exclude_areas (id, dataset_id, created_by_user_id, shape_type, geometry_json, label, apply_by_default_on_export, created_at)
-       VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8)`,
-      [excludeAreaId, datasetId, user.id, shapeType, JSON.stringify(geometry), label, applyByDefaultOnExport, new Date().toISOString()]
+      `INSERT INTO exclude_areas (
+        id,
+        dataset_id,
+        created_by_user_id,
+        shape_type,
+        effect_type,
+        compress_min_points,
+        compress_max_points,
+        geometry_json,
+        label,
+        apply_by_default_on_export,
+        created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)`,
+      [
+        excludeAreaId,
+        datasetId,
+        user.id,
+        shapeType,
+        effectType,
+        effectType === 'compress' ? normalizedCompressMinPoints : null,
+        effectType === 'compress' ? normalizedCompressMaxPoints : null,
+        JSON.stringify(geometry),
+        label,
+        applyByDefaultOnExport,
+        new Date().toISOString()
+      ]
     );
 
     await audit.record({
@@ -548,7 +640,14 @@ export const createDatasetService = ({ db, audit }) => {
       eventType: 'exclude_area.created',
       entityType: 'exclude_area',
       entityId: excludeAreaId,
-      payload: { datasetId, shapeType, label }
+      payload: {
+        datasetId,
+        shapeType,
+        effectType,
+        compressMinPoints: effectType === 'compress' ? normalizedCompressMinPoints : null,
+        compressMaxPoints: effectType === 'compress' ? normalizedCompressMaxPoints : null,
+        label
+      }
     });
   };
 

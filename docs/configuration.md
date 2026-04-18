@@ -28,12 +28,15 @@ Mutable non-secret settings are seeded from bootstrap files into Postgres and th
 
 - default theme
 - default font
+- default language
 - default map metric
 - default aggregation shape
 - aggregate mode bucket precision
 - raw point cap
 - Redis cache TTL seconds
 - map tile URL template and attribution
+
+`ui.defaultLanguage` comes from the bootstrap config file and currently controls the WUI language with `en-US` fallback. There is no runtime language picker.
 
 ## Additional Env Vars
 

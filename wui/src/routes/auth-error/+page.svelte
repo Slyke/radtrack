@@ -1,7 +1,17 @@
+<script lang="ts">
+  import { localeStore, translateMessage } from '$lib/i18n';
+
+  const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
+    key,
+    values,
+    messages: $localeStore.messages
+  });
+</script>
+
 <section class="panel">
-  <h1>Authentication Error</h1>
-  <p class="muted">The backend rejected the current auth flow. Check provider config, linked identities, and upstream header auth policy.</p>
+  <h1>{t('radiacode-common_authentication_error-title')}</h1>
+  <p class="muted">{t('radiacode-auth_error-description')}</p>
   <div class="actions">
-    <a class="button-link" href="/login">Back to login</a>
+    <a class="button-link" href="/login">{t('radiacode-common_back_to_login-button')}</a>
   </div>
 </section>

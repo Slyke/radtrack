@@ -446,18 +446,36 @@ export const createAuthService = ({ db, runtimeConfig, logger, audit }) => {
     };
   };
 
-  const changePassword = async ({ userId, currentPassword, newPassword, correlationId = null }) => {
+  const changePassword = async ({
+    userId,
+    currentPassword,
+    newPassword,
+    requireCurrentPassword = true,
+    correlationId = null
+  }) => {
     const user = await getUserById({ userId });
     ensureUserCanLogin({ row: user, correlationId });
 
-    if (user.password_hash && !verifyPassword({ password: currentPassword, storedHash: user.password_hash })) {
+    if (typeof newPassword !== 'string' || !newPassword.length) {
       throw createAppError({
         caller: 'auth::changePassword',
-        reason: 'Current password is incorrect.',
-        errorKey: 'AUTH_INVALID_CREDENTIALS',
+        reason: 'New password is required.',
+        errorKey: 'REQUEST_INVALID',
         correlationId,
-        status: 401
+        status: 400
       });
+    }
+
+    if (requireCurrentPassword && user.password_hash) {
+      if (typeof currentPassword !== 'string' || !verifyPassword({ password: currentPassword, storedHash: user.password_hash })) {
+        throw createAppError({
+          caller: 'auth::changePassword',
+          reason: 'Current password is incorrect.',
+          errorKey: 'AUTH_INVALID_CREDENTIALS',
+          correlationId,
+          status: 401
+        });
+      }
     }
 
     await db.query(

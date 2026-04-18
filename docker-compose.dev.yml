@@ -34,17 +34,19 @@ services:
     working_dir: /workspace
     command:
       - bash
-      - -lc
-      - npm install && npm run dev -- --host 0.0.0.0 --port 3000
+      - /workspace/wui/scripts/dev-entrypoint.sh
     environment:
-      PUBLIC_API_URL: http://localhost:8192
+      PUBLIC_API_URL: ""
+      INTERNAL_API_URL: http://radiacode-api:8192
+      PORT: "4096"
       RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
       CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
     volumes:
-      - ./wui:/workspace
+      - ./:/workspace
       - radiacode-wui-node-modules:/workspace/node_modules
     ports:
-      - "3000:3000"
+      - "4096:4096"
     restart: unless-stopped
 
   postgres:

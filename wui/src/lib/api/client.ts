@@ -1,6 +1,7 @@
+import { env } from '$env/dynamic/public';
 import type { SessionPayload } from '$lib/types';
 
-const API_BASE = (import.meta.env.PUBLIC_API_URL || '').replace(/\/$/, '');
+const API_BASE = (env.PUBLIC_API_URL || '').replace(/\/$/, '');
 
 export class ApiError extends Error {
   status: number;
@@ -13,7 +14,7 @@ export class ApiError extends Error {
   }
 }
 
-const resolvePath = ({ path }: { path: string }) => `${API_BASE}${path}`;
+export const resolveApiPath = ({ path }: { path: string }) => `${API_BASE}${path}`;
 
 const parseBody = async ({ response }: { response: Response }) => {
   const contentType = response.headers.get('content-type') ?? '';
@@ -22,6 +23,32 @@ const parseBody = async ({ response }: { response: Response }) => {
   }
 
   return response.text().catch(() => null);
+};
+
+const resolveErrorMessage = ({ body, status }: { body: unknown; status: number }) => {
+  if (!body || typeof body !== 'object') {
+    return `HTTP ${status}`;
+  }
+
+  const payload = body as {
+    reason?: unknown;
+    errorCode?: unknown;
+    errorKey?: unknown;
+  };
+
+  if (typeof payload.reason === 'string' && payload.reason.trim()) {
+    if (typeof payload.errorCode === 'string' && payload.errorCode.trim()) {
+      return `${payload.reason} (${payload.errorCode})`;
+    }
+
+    if (typeof payload.errorKey === 'string' && payload.errorKey.trim()) {
+      return `${payload.reason} (${payload.errorKey})`;
+    }
+
+    return payload.reason;
+  }
+
+  return `HTTP ${status}`;
 };
 
 const toQuery = ({ params }: { params: Record<string, unknown> }) => {
@@ -72,7 +99,7 @@ export const apiFetch = async <T>({
     headers.set(csrf.headerName, csrf.token);
   }
 
-  const response = await fetch(resolvePath({ path: `${path}${query ? toQuery({ params: query }) : ''}` }), {
+  const response = await fetch(resolveApiPath({ path: `${path}${query ? toQuery({ params: query }) : ''}` }), {
     method,
     headers,
     credentials: 'include',
@@ -83,7 +110,8 @@ export const apiFetch = async <T>({
   if (!response.ok) {
     throw new ApiError({
       status: response.status,
-      body: parsedBody
+      body: parsedBody,
+      message: resolveErrorMessage({ body: parsedBody, status: response.status })
     });
   }
 
@@ -115,7 +143,7 @@ export const changePassword = async ({
   newPassword
 }: {
   csrf: SessionPayload['csrf'];
-  currentPassword: string;
+  currentPassword?: string;
   newPassword: string;
 }) => apiFetch({
   path: '/auth/change-password',
@@ -132,7 +160,7 @@ export const logout = async ({ csrf }: { csrf: SessionPayload['csrf'] }) => apiF
 });
 
 export const startOidcLogin = ({ redirectTo = '/dashboard' }: { redirectTo?: string } = {}) => {
-  window.location.href = resolvePath({ path: `/auth/oidc/login${toQuery({ params: { redirectTo } })}` });
+  window.location.href = resolveApiPath({ path: `/auth/oidc/login${toQuery({ params: { redirectTo } })}` });
 };
 
 export const uploadImport = ({
@@ -149,7 +177,7 @@ export const uploadImport = ({
   onProgress?: (percent: number) => void;
 }) => new Promise<unknown>((resolve, reject) => {
   const request = new XMLHttpRequest();
-  request.open('POST', resolvePath({ path: '/api/imports' }));
+  request.open('POST', resolveApiPath({ path: '/api/imports' }));
   request.withCredentials = true;
   request.setRequestHeader('Accept', 'application/json');
   if (csrf) {
@@ -169,7 +197,11 @@ export const uploadImport = ({
     try {
       const body = request.responseText ? JSON.parse(request.responseText) : null;
       if (request.status < 200 || request.status >= 300) {
-        reject(new ApiError({ status: request.status, body }));
+        reject(new ApiError({
+          status: request.status,
+          body,
+          message: resolveErrorMessage({ body, status: request.status })
+        }));
         return;
       }
 

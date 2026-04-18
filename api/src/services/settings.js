@@ -3,6 +3,7 @@ import { createAppError } from '../lib/errors.js';
 const defaultSettingsFromConfig = ({ runtimeConfig }) => ({
   'ui.defaultTheme': runtimeConfig.ui.defaultTheme,
   'ui.defaultFont': runtimeConfig.ui.defaultFont,
+  'ui.defaultLanguage': runtimeConfig.ui.defaultLanguage,
   'map.tileUrlTemplate': runtimeConfig.map.tileUrlTemplate,
   'map.attribution': runtimeConfig.map.attribution,
   'map.defaultMetric': runtimeConfig.map.defaultMetric,
@@ -52,6 +53,7 @@ export const createSettingsService = ({ db, runtimeConfig }) => {
     return {
       theme: settings['ui.defaultTheme'] ?? runtimeConfig.ui.defaultTheme,
       font: settings['ui.defaultFont'] ?? runtimeConfig.ui.defaultFont,
+      language: settings['ui.defaultLanguage'] ?? runtimeConfig.ui.defaultLanguage,
       tileUrlTemplate: settings['map.tileUrlTemplate'] ?? runtimeConfig.map.tileUrlTemplate,
       attribution: settings['map.attribution'] ?? runtimeConfig.map.attribution,
       defaultMetric: settings['map.defaultMetric'] ?? runtimeConfig.map.defaultMetric,

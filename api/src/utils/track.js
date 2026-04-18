@@ -75,6 +75,11 @@ const parseDeviceIdentifier = ({ raw }) => {
 
 const splitTsvLine = ({ line }) => String(line ?? '').split('\t');
 
+const warningTypeReasonMap = {
+  timestamp_mismatch: 'Timestamp and text time did not agree.',
+  duplicate_row: 'Duplicate readings were detected.'
+};
+
 export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => {
   const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
   const rawLines = text.split(/\r?\n/).filter((line, index, array) => !(index === array.length - 1 && line === ''));
@@ -110,8 +115,12 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
   let startedAt = null;
   let endedAt = null;
   const warnings = [];
+  const warningTypeCounts = new Map();
   const rows = [];
   const rowDedup = new Set();
+  const incrementWarningTypeCount = (type) => {
+    warningTypeCounts.set(type, (warningTypeCounts.get(type) ?? 0) + 1);
+  };
 
   for (let rowIndex = 2; rowIndex < rawLines.length; rowIndex += 1) {
     const rawLine = rawLines[rowIndex];
@@ -146,6 +155,7 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
     ) {
       warningFlags.push('timestamp_mismatch');
       warningCount += 1;
+      incrementWarningTypeCount('timestamp_mismatch');
     }
 
     const latitude = parseNumber({ value: record.Latitude });
@@ -165,6 +175,7 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
     if (rowDedup.has(rowKey)) {
       warningFlags.push('duplicate_row');
       warningCount += 1;
+      incrementWarningTypeCount('duplicate_row');
     }
     rowDedup.add(rowKey);
 
@@ -205,6 +216,11 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
     skippedRowCount,
     startedAt,
     endedAt,
+    warningBreakdown: Array.from(warningTypeCounts.entries()).map(([type, count]) => ({
+      type,
+      count,
+      reason: warningTypeReasonMap[type] ?? type
+    })),
     warnings,
     rows
   };

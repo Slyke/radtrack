@@ -1,5 +1,6 @@
 import Busboy from 'busboy';
-import { createAppError } from '../lib/errors.js';
+import { AppError, createAppError } from '../lib/errors.js';
+import { logError } from '../lib/logger.js';
 import { createOpaqueId, sha256Hex } from '../utils/ids.js';
 import { detectImportKind, extractSupportedArchiveEntries, parseTrackBuffer } from '../utils/track.js';
 import { canImport } from './permissions.js';
@@ -13,9 +14,9 @@ const batchInsertReadings = async ({ client, trackId, rows, actorCreatedAt }) =>
     const placeholders = [];
 
     slice.forEach((row, index) => {
-      const base = index * 15;
+      const base = index * 16;
       placeholders.push(
-        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}::jsonb, $${base + 14}::jsonb, $${base + 15})`
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}::jsonb, $${base + 14}::jsonb, $${base + 15}, $${base + 16})`
       );
       values.push(
         createOpaqueId(),
@@ -32,6 +33,7 @@ const batchInsertReadings = async ({ client, trackId, rows, actorCreatedAt }) =>
         row.rowNumber,
         JSON.stringify(row.warningFlags),
         JSON.stringify(row.extraJson),
+        actorCreatedAt,
         actorCreatedAt
       );
     });
@@ -52,6 +54,7 @@ const batchInsertReadings = async ({ client, trackId, rows, actorCreatedAt }) =>
         row_number,
         warning_flags_json,
         extra_json,
+        received_at,
         created_at
       ) VALUES ${placeholders.join(', ')}`,
       values
@@ -59,14 +62,34 @@ const batchInsertReadings = async ({ client, trackId, rows, actorCreatedAt }) =>
   }
 };
 
-const parseMultipartUpload = ({ req }) => new Promise((resolve, reject) => {
-  const busboy = Busboy({
-    headers: req.headers,
-    limits: {
-      files: 50,
-      fileSize: 256 * 1024 * 1024
-    }
-  });
+const parseMultipartUpload = ({ req, logger, correlationId = null }) => new Promise((resolve, reject) => {
+  let busboy;
+  const fileSizeLimitBytes = 256 * 1024 * 1024;
+
+  try {
+    busboy = Busboy({
+      headers: req.headers,
+      limits: {
+        files: 50,
+        fileSize: fileSizeLimitBytes
+      }
+    });
+  } catch (cause) {
+    reject(logError({
+      logger,
+      caller: 'imports::parseMultipartUpload',
+      reason: 'Failed initializing multipart parser.',
+      errorKey: 'IMPORT_REQUEST_MULTIPART_INIT_FAILED',
+      correlationId,
+      context: {
+        contentType: req.headers['content-type'] ?? null
+      },
+      cause,
+      status: 400
+    }));
+    return;
+  }
+
   const files = [];
   const fields = {};
 
@@ -74,7 +97,19 @@ const parseMultipartUpload = ({ req }) => new Promise((resolve, reject) => {
     const chunks = [];
 
     file.on('data', (chunk) => chunks.push(chunk));
-    file.on('limit', () => reject(new Error(`File too large: ${info.filename}`)));
+    file.on('limit', () => reject(logError({
+      logger,
+      caller: 'imports::parseMultipartUpload',
+      reason: 'Upload file exceeded the configured size limit.',
+      errorKey: 'IMPORT_REQUEST_FILE_TOO_LARGE',
+      correlationId,
+      context: {
+        fieldName,
+        fileName: info.filename,
+        sizeLimitBytes: fileSizeLimitBytes
+      },
+      status: 413
+    })));
     file.on('end', () => {
       files.push({
         fieldName,
@@ -88,7 +123,18 @@ const parseMultipartUpload = ({ req }) => new Promise((resolve, reject) => {
   busboy.on('field', (fieldName, value) => {
     fields[fieldName] = value;
   });
-  busboy.on('error', reject);
+  busboy.on('error', (cause) => reject(logError({
+    logger,
+    caller: 'imports::parseMultipartUpload',
+    reason: 'Multipart stream parsing failed.',
+    errorKey: 'IMPORT_REQUEST_MULTIPART_STREAM_FAILED',
+    correlationId,
+    context: {
+      contentType: req.headers['content-type'] ?? null
+    },
+    cause,
+    status: 400
+  })));
   busboy.on('finish', () => resolve({ files, fields }));
   req.pipe(busboy);
 });
@@ -111,7 +157,57 @@ const rawFileSummary = ({ rawFileId, originalFilename, checksum, sizeBytes, pars
   summary
 });
 
-export const createImportService = ({ db, audit }) => {
+export const createImportService = ({ db, audit, logger }) => {
+  const toLoggedAppError = ({
+    caller,
+    reason,
+    errorKey,
+    correlationId = null,
+    context = null,
+    cause = null,
+    status = 500,
+    preserveExisting = true
+  }) => {
+    if (cause instanceof AppError && preserveExisting) {
+      return cause;
+    }
+
+    if (cause instanceof AppError) {
+      const wrapped = new AppError({
+        caller,
+        reason,
+        errorKey,
+        correlationId,
+        context,
+        cause,
+        status
+      });
+
+      logger.error({
+        caller,
+        message: reason,
+        correlationId,
+        errorKey: wrapped.errorKey,
+        errorCode: wrapped.errorCode,
+        context,
+        rootCause: cause
+      });
+
+      return wrapped;
+    }
+
+    return logError({
+      logger,
+      caller,
+      reason,
+      errorKey,
+      correlationId,
+      context,
+      cause,
+      status
+    });
+  };
+
   const ensureUserDevice = async ({ client, userId, device, correlationId = null }) => {
     if (!device.deviceIdentifierRaw) {
       return;
@@ -294,7 +390,8 @@ export const createImportService = ({ db, audit }) => {
     buffer,
     parentRawFileId = null,
     sourceType,
-    provenance
+    provenance,
+    correlationId = null
   }) => {
     const checksum = sha256Hex({ value: buffer });
     const duplicateOfRawFileId = await findDuplicateRawFile({ client, checksum });
@@ -333,8 +430,8 @@ export const createImportService = ({ db, audit }) => {
     }
 
     try {
-      const parsed = parseTrackBuffer({ buffer, fileName });
-      await ensureUserDevice({ client, userId: ownerUserId, device: parsed.device });
+      const parsed = parseTrackBuffer({ buffer, fileName, correlationId });
+      await ensureUserDevice({ client, userId: ownerUserId, device: parsed.device, correlationId });
       const trackId = await createTrackFromParsed({
         client,
         datasetId,
@@ -350,6 +447,7 @@ export const createImportService = ({ db, audit }) => {
         warningCount: parsed.warningCount,
         errorCount: parsed.errorCount,
         skippedRowCount: parsed.skippedRowCount,
+        warningBreakdown: parsed.warningBreakdown,
         warnings: parsed.warnings
       };
 
@@ -369,9 +467,28 @@ export const createImportService = ({ db, audit }) => {
         parseStatus: 'parsed',
         summary
       });
-    } catch (error) {
+    } catch (cause) {
+      const appError = toLoggedAppError({
+        caller: 'imports::processTrackPayload',
+        reason: 'Track payload processing failed.',
+        errorKey: 'IMPORT_TRACK_PROCESS_FAILED',
+        correlationId,
+        context: {
+          batchId,
+          datasetId,
+          ownerUserId,
+          fileName,
+          parentRawFileId,
+          sourceType,
+          sizeBytes: buffer.length
+        },
+        cause,
+        preserveExisting: false
+      });
       const summary = {
-        error: error.message
+        error: appError.reason,
+        errorKey: appError.errorKey,
+        errorCode: appError.errorCode
       };
       await client.query(
         `UPDATE raw_files
@@ -397,9 +514,24 @@ export const createImportService = ({ db, audit }) => {
     batchId,
     datasetId,
     ownerUserId,
-    file
+    file,
+    correlationId = null
   }) => {
     const importKind = detectImportKind({ fileName: file.fileName, buffer: file.buffer });
+
+    logger.info({
+      caller: 'imports::processUploadedFile',
+      message: 'Processing uploaded file.',
+      correlationId,
+      context: {
+        batchId,
+        datasetId,
+        ownerUserId,
+        fileName: file.fileName,
+        importKind,
+        sizeBytes: file.buffer.length
+      }
+    });
 
     if (importKind === 'archive') {
       const rootChecksum = sha256Hex({ value: file.buffer });
@@ -418,7 +550,7 @@ export const createImportService = ({ db, audit }) => {
         }
       });
       try {
-        const children = await extractSupportedArchiveEntries({ buffer: file.buffer });
+        const children = await extractSupportedArchiveEntries({ buffer: file.buffer, correlationId });
         const childSummaries = [];
         for (const child of children) {
           childSummaries.push(await processTrackPayload({
@@ -432,7 +564,8 @@ export const createImportService = ({ db, audit }) => {
             sourceType: 'archive_child',
             provenance: {
               archiveName: file.fileName
-            }
+            },
+            correlationId
           }));
         }
 
@@ -458,13 +591,33 @@ export const createImportService = ({ db, audit }) => {
           sizeBytes: file.buffer.length,
           children: childSummaries
         };
-      } catch (error) {
+      } catch (cause) {
+        const appError = toLoggedAppError({
+          caller: 'imports::processUploadedFile',
+          reason: 'Archive payload processing failed.',
+          errorKey: 'IMPORT_ARCHIVE_PROCESS_FAILED',
+          correlationId,
+          context: {
+            batchId,
+            datasetId,
+            ownerUserId,
+            fileName: file.fileName,
+            rootRawFileId,
+            sizeBytes: file.buffer.length
+          },
+          cause,
+          preserveExisting: false
+        });
         await client.query(
           `UPDATE raw_files
            SET parse_status = 'failed',
                parse_summary_json = $2::jsonb
            WHERE id = $1`,
-          [rootRawFileId, JSON.stringify({ error: error.message })]
+          [rootRawFileId, JSON.stringify({
+            error: appError.reason,
+            errorKey: appError.errorKey,
+            errorCode: appError.errorCode
+          })]
         );
 
         return {
@@ -474,7 +627,9 @@ export const createImportService = ({ db, audit }) => {
           checksum: rootChecksum,
           sizeBytes: file.buffer.length,
           children: [],
-          error: error.message
+          error: appError.reason,
+          errorKey: appError.errorKey,
+          errorCode: appError.errorCode
         };
       }
     }
@@ -490,9 +645,9 @@ export const createImportService = ({ db, audit }) => {
       sourceType: 'single_file',
       provenance: {
         uploadFieldName: file.fieldName,
-        mimeType: file.mimeType,
-        rootRawFileId
-      }
+        mimeType: file.mimeType
+      },
+      correlationId
     });
 
     return {
@@ -510,18 +665,46 @@ export const createImportService = ({ db, audit }) => {
       throw createAppError({
         caller: 'imports::importRequest',
         reason: 'This user is not allowed to import datasets.',
-        errorKey: 'AUTH_FORBIDDEN',
+        errorKey: 'IMPORT_REQUEST_FORBIDDEN',
         correlationId,
         status: 403
       });
     }
 
-    const { files, fields } = await parseMultipartUpload({ req });
+    logger.info({
+      caller: 'imports::importRequest',
+      message: 'Starting import request.',
+      correlationId,
+      context: {
+        userId: user.id,
+        username: user.username
+      }
+    });
+
+    let parsedUpload;
+    try {
+      parsedUpload = await parseMultipartUpload({ req, logger, correlationId });
+    } catch (cause) {
+      throw toLoggedAppError({
+        caller: 'imports::importRequest',
+        reason: 'Failed parsing multipart upload request.',
+        errorKey: 'IMPORT_REQUEST_MULTIPART_PARSE_FAILED',
+        correlationId,
+        context: {
+          userId: user.id,
+          contentType: req.headers['content-type'] ?? null
+        },
+        cause,
+        status: 400
+      });
+    }
+
+    const { files, fields } = parsedUpload;
     if (!files.length) {
       throw createAppError({
         caller: 'imports::importRequest',
         reason: 'At least one file is required.',
-        errorKey: 'IMPORT_INVALID_PAYLOAD',
+        errorKey: 'IMPORT_REQUEST_EMPTY_FILES',
         correlationId,
         status: 400
       });
@@ -536,84 +719,164 @@ export const createImportService = ({ db, audit }) => {
       ? fields.datasetName.trim()
       : defaultDatasetName({ files });
 
-    return db.withTransaction(async (client) => {
-      await client.query(
-        `INSERT INTO upload_batches (
-          id,
-          uploader_user_id,
-          source_type,
-          original_filename,
-          checksum,
-          size_bytes,
-          uploaded_at,
-          status,
-          summary_json
-        ) VALUES ($1, $2, $3, $4, NULL, NULL, $5, 'processing', '{}'::jsonb)`,
-        [batchId, user.id, sourceType, files[0]?.fileName ?? null, uploadedAt]
-      );
-
-      const datasetId = await createDataset({
-        client,
-        ownerUserId: user.id,
-        datasetName,
-        description: typeof fields.description === 'string' ? fields.description : null
-      });
-
-      const fileResults = [];
-      for (const file of files) {
-        fileResults.push(await processUploadedFile({
-          client,
-          batchId,
-          datasetId,
-          ownerUserId: user.id,
-          file
-        }));
-      }
-
-      const flattenedChildren = fileResults.flatMap((fileResult) => fileResult.children ?? []);
-      const summary = {
-        datasetId,
+    logger.info({
+      caller: 'imports::importRequest',
+      message: 'Parsed multipart upload.',
+      correlationId,
+      context: {
+        userId: user.id,
+        batchId,
+        sourceType,
         datasetName,
         fileCount: files.length,
-        parsedFileCount: flattenedChildren.filter((entry) => entry.parseStatus === 'parsed').length,
-        duplicateFileCount: flattenedChildren.filter((entry) => entry.parseStatus === 'duplicate_skipped').length,
-        failedFileCount: flattenedChildren.filter((entry) => entry.parseStatus === 'failed').length,
-        warningCount: flattenedChildren.reduce((total, entry) => total + (entry.summary?.warningCount ?? 0), 0),
-        errorCount: flattenedChildren.reduce((total, entry) => total + (entry.summary?.errorCount ?? (entry.parseStatus === 'failed' ? 1 : 0)), 0),
-        skippedRowCount: flattenedChildren.reduce((total, entry) => total + (entry.summary?.skippedRowCount ?? 0), 0),
-        files: fileResults
-      };
-      const status = summary.failedFileCount > 0
-        ? (summary.parsedFileCount > 0 ? 'completed_with_errors' : 'failed')
-        : (summary.warningCount > 0 || summary.duplicateFileCount > 0 ? 'completed_with_warnings' : 'completed');
+        fileNames: files.map((file) => file.fileName)
+      }
+    });
 
-      await client.query(
-        `UPDATE upload_batches
-         SET status = $2,
-             summary_json = $3::jsonb
-         WHERE id = $1`,
-        [batchId, status, JSON.stringify(summary)]
-      );
+    try {
+      const result = await db.withTransaction(async (client) => {
+        await client.query(
+          `INSERT INTO upload_batches (
+            id,
+            uploader_user_id,
+            source_type,
+            original_filename,
+            checksum,
+            size_bytes,
+            uploaded_at,
+            status,
+            summary_json
+          ) VALUES ($1, $2, $3, $4, NULL, NULL, $5, 'processing', '{}'::jsonb)`,
+          [batchId, user.id, sourceType, files[0]?.fileName ?? null, uploadedAt]
+        );
 
-      await audit.record({
-        actorUserId: user.id,
-        eventType: 'import.completed',
-        entityType: 'upload_batch',
-        entityId: batchId,
-        payload: {
+        const datasetId = await createDataset({
+          client,
+          ownerUserId: user.id,
+          datasetName,
+          description: typeof fields.description === 'string' ? fields.description : null
+        });
+
+        const fileResults = [];
+        for (const file of files) {
+          try {
+            fileResults.push(await processUploadedFile({
+              client,
+              batchId,
+              datasetId,
+              ownerUserId: user.id,
+              file,
+              correlationId
+            }));
+          } catch (cause) {
+            throw toLoggedAppError({
+              caller: 'imports::importRequest',
+              reason: 'Failed processing uploaded file during import.',
+              errorKey: 'IMPORT_REQUEST_FILE_PROCESS_FAILED',
+              correlationId,
+              context: {
+                batchId,
+                datasetId,
+                fileName: file.fileName,
+                fileSizeBytes: file.buffer.length
+              },
+              cause
+            });
+          }
+        }
+
+        const flattenedChildren = fileResults.flatMap((fileResult) => fileResult.children ?? []);
+        const summary = {
+          datasetId,
+          datasetName,
+          fileCount: files.length,
+          parsedFileCount: flattenedChildren.filter((entry) => entry.parseStatus === 'parsed').length,
+          duplicateFileCount: flattenedChildren.filter((entry) => entry.parseStatus === 'duplicate_skipped').length,
+          failedFileCount: flattenedChildren.filter((entry) => entry.parseStatus === 'failed').length,
+          warningCount: flattenedChildren.reduce((total, entry) => total + (entry.summary?.warningCount ?? 0), 0),
+          errorCount: flattenedChildren.reduce((total, entry) => total + (entry.summary?.errorCount ?? (entry.parseStatus === 'failed' ? 1 : 0)), 0),
+          skippedRowCount: flattenedChildren.reduce((total, entry) => total + (entry.summary?.skippedRowCount ?? 0), 0),
+          files: fileResults
+        };
+        const status = summary.failedFileCount > 0
+          ? (summary.parsedFileCount > 0 ? 'completed_with_errors' : 'failed')
+          : (summary.warningCount > 0 || summary.duplicateFileCount > 0 ? 'completed_with_warnings' : 'completed');
+
+        await client.query(
+          `UPDATE upload_batches
+           SET status = $2,
+               summary_json = $3::jsonb
+           WHERE id = $1`,
+          [batchId, status, JSON.stringify(summary)]
+        );
+
+        try {
+          await audit.record({
+            actorUserId: user.id,
+            eventType: 'import.completed',
+            entityType: 'upload_batch',
+            entityId: batchId,
+            payload: {
+              datasetId,
+              status,
+              summary
+            }
+          });
+        } catch (cause) {
+          throw toLoggedAppError({
+            caller: 'imports::importRequest',
+            reason: 'Failed recording import audit event.',
+            errorKey: 'IMPORT_REQUEST_AUDIT_FAILED',
+            correlationId,
+            context: {
+              batchId,
+              datasetId,
+              status
+            },
+            cause
+          });
+        }
+
+        return {
+          batchId,
           datasetId,
           status,
           summary
+        };
+      });
+
+      logger.info({
+        caller: 'imports::importRequest',
+        message: 'Completed import request.',
+        correlationId,
+        context: {
+          userId: user.id,
+          batchId: result.batchId,
+          datasetId: result.datasetId,
+          status: result.status,
+          fileCount: result.summary.fileCount,
+          parsedFileCount: result.summary.parsedFileCount,
+          failedFileCount: result.summary.failedFileCount
         }
       });
 
-      return {
-        batchId,
-        datasetId,
-        status,
-        summary
-      };
-    });
+      return result;
+    } catch (cause) {
+      throw toLoggedAppError({
+        caller: 'imports::importRequest',
+        reason: 'Failed completing import transaction.',
+        errorKey: 'IMPORT_REQUEST_TRANSACTION_FAILED',
+        correlationId,
+        context: {
+          userId: user.id,
+          batchId,
+          sourceType,
+          datasetName,
+          fileCount: files.length
+        },
+        cause
+      });
+    }
   };
 
   const listUploadBatches = async ({ user, failedOnly = false }) => {
@@ -657,7 +920,7 @@ export const createImportService = ({ db, audit }) => {
       throw createAppError({
         caller: 'imports::getUploadBatch',
         reason: 'Upload batch was not found.',
-        errorKey: 'DATASET_NOT_FOUND',
+        errorKey: 'IMPORT_BATCH_NOT_FOUND',
         correlationId,
         status: 404
       });
@@ -671,7 +934,7 @@ export const createImportService = ({ db, audit }) => {
       throw createAppError({
         caller: 'imports::getUploadBatch',
         reason: 'This upload batch is not visible to the current user.',
-        errorKey: 'AUTH_FORBIDDEN',
+        errorKey: 'IMPORT_BATCH_FORBIDDEN',
         correlationId,
         status: 403
       });

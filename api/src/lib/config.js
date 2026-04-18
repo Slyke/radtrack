@@ -127,7 +127,10 @@ export const loadRuntimeConfig = async ({ correlationId = null } = {}) => {
     },
     ui: {
       defaultTheme: rawConfig?.ui?.defaultTheme === 'light' ? 'light' : 'dark',
-      defaultFont: typeof rawConfig?.ui?.defaultFont === 'string' ? rawConfig.ui.defaultFont : 'ui-mono'
+      defaultFont: typeof rawConfig?.ui?.defaultFont === 'string' ? rawConfig.ui.defaultFont : 'ui-mono',
+      defaultLanguage: typeof rawConfig?.ui?.defaultLanguage === 'string' && rawConfig.ui.defaultLanguage.trim()
+        ? rawConfig.ui.defaultLanguage.trim()
+        : 'en-US'
     },
     map: {
       tileUrlTemplate: requiredString({ value: rawConfig?.map?.tileUrlTemplate, field: 'map.tileUrlTemplate', correlationId }),

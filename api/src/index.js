@@ -14,6 +14,7 @@ import { createAuthService } from './services/auth.js';
 import { createSettingsService } from './services/settings.js';
 import { createImportService } from './services/imports.js';
 import { createDatasetService } from './services/datasets.js';
+import { createTrackService } from './services/tracks.js';
 import { createQueryService } from './services/query.js';
 import { createExportService } from './services/export.js';
 import { canModerateUsers, canManageSystem, ensureRole } from './services/permissions.js';
@@ -30,6 +31,36 @@ const asyncHandler = (run) => async (req, res, next) => {
 
 const sendJson = ({ res, status = 200, body }) => {
   res.status(status).json(body);
+};
+
+const invalidateDatasetsSafely = async ({
+  logger,
+  queryService,
+  datasetIds,
+  correlationId,
+  caller,
+  reason = 'Failed invalidating dataset cache.',
+  context = null
+}) => {
+  if (!Array.isArray(datasetIds) || !datasetIds.length) {
+    return;
+  }
+
+  try {
+    await queryService.invalidateDatasets({ datasetIds });
+  } catch (cause) {
+    logger.warn({
+      caller,
+      message: reason,
+      correlationId,
+      errorKey: 'CACHE_FAILED',
+      context: {
+        datasetIds,
+        ...(context ?? {})
+      },
+      rootCause: cause
+    });
+  }
 };
 
 const toHealthBody = ({ service, buildInfo, extra = {} }) => ({
@@ -140,7 +171,8 @@ const main = async () => {
   const settingsService = createSettingsService({ db, runtimeConfig });
   const datasetService = createDatasetService({ db, audit });
   const authService = createAuthService({ db, runtimeConfig, logger, audit });
-  const importService = createImportService({ db, audit });
+  const importService = createImportService({ db, audit, logger });
+  const trackService = createTrackService({ db, audit, datasetService });
   const queryService = createQueryService({ db, cache, settingsService, datasetService });
   const exportService = createExportService({ queryService, settingsService });
 
@@ -160,6 +192,33 @@ const main = async () => {
         header: runtimeConfig.auth.headerEnabled
       },
       monolith: runtimeConfig.monolith
+    }
+  });
+
+  await audit.record({
+    actorUserId: null,
+    scopeUserId: null,
+    eventType: 'app.started',
+    entityType: 'service',
+    entityId: 'radiacode-api',
+    payload: {
+      build: buildInfo.label,
+      version: buildInfo.version,
+      commitHash: buildInfo.commitHash,
+      port: runtimeConfig.port,
+      authModes: {
+        local: runtimeConfig.auth.localEnabled,
+        oidc: runtimeConfig.auth.oidcEnabled,
+        header: runtimeConfig.auth.headerEnabled
+      },
+      monolith: runtimeConfig.monolith,
+      ...(logger.kubernetes
+        ? {
+            metadata: {
+              kubernetes: logger.kubernetes
+            }
+          }
+        : {})
     }
   });
 
@@ -260,6 +319,39 @@ const main = async () => {
     });
   }));
 
+  app.post('/api/ingest/tracks/:ingestTrackId/points', asyncHandler(async (req, res) => {
+    const body = requireJsonBodyObject({ body: req.body, correlationId: req.correlationId });
+    const apiKey = req.headers[trackService.ingestKeyHeaderName];
+    const result = await trackService.ingestPoint({
+      ingestTrackId: req.params.ingestTrackId,
+      apiKey: typeof apiKey === 'string' ? apiKey : Array.isArray(apiKey) ? apiKey[0] : null,
+      input: body,
+      correlationId: req.correlationId
+    });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [result.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::ingest::invalidateDatasets',
+      context: {
+        ingestTrackId: req.params.ingestTrackId,
+        trackId: result.trackId
+      }
+    });
+    sendJson({
+      res,
+      status: result.duplicate ? 200 : 201,
+      body: {
+        ok: true,
+        duplicate: result.duplicate,
+        trackId: result.trackId,
+        datasetId: result.datasetId,
+        reading: result.reading
+      }
+    });
+  }));
+
   app.post('/auth/local/login', asyncHandler(async (req, res) => {
     const body = requireJsonBodyObject({ body: req.body, correlationId: req.correlationId });
     const result = await authService.localLogin({
@@ -293,6 +385,7 @@ const main = async () => {
       userId: auth.user.id,
       currentPassword: body.currentPassword,
       newPassword: body.newPassword,
+      requireCurrentPassword: !auth.user.mustChangePassword,
       correlationId: req.correlationId
     });
     sendJson({ res, body: { ok: true } });
@@ -354,7 +447,7 @@ const main = async () => {
     const [datasets, uploads, audits] = await Promise.all([
       datasetService.listDatasets({ user: auth.user }),
       importService.listUploadBatches({ user: auth.user }),
-      audit.listRecent({ limit: 12 })
+      audit.listRecent({ user: auth.user, limit: 12 })
     ]);
 
     sendJson({
@@ -373,6 +466,41 @@ const main = async () => {
     });
   }));
 
+  app.get('/api/audit', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    const download = String(Array.isArray(req.query.download) ? req.query.download[0] : req.query.download ?? '') === '1';
+
+    if (download) {
+      const auditLog = await audit.exportEntries({
+        user: auth.user,
+        limitValue: req.query.limit,
+        buildLabel: buildInfo.label
+      });
+      const payload = JSON.stringify(auditLog);
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="radiacode-audit-${auditLog.filters.limit}.json"`
+      );
+      res.setHeader('Content-Length', String(Buffer.byteLength(payload, 'utf8')));
+      res.status(200).send(payload);
+      return;
+    }
+
+    const page = await audit.listPage({
+      user: auth.user,
+      limitValue: req.query.limit
+    });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        ...page
+      }
+    });
+  }));
+
   app.post('/api/imports', asyncHandler(async (req, res) => {
     const auth = requireMutationAuth({
       req,
@@ -385,7 +513,18 @@ const main = async () => {
       user: auth.user,
       correlationId: req.correlationId
     });
-    await queryService.invalidateDatasets({ datasetIds: [result.datasetId] });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [result.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::imports::invalidateDatasets',
+      reason: 'Failed invalidating dataset cache after import.',
+      context: {
+        batchId: result.batchId,
+        datasetId: result.datasetId
+      }
+    });
     sendJson({ res, status: 201, body: { ok: true, ...result } });
   }));
 
@@ -459,6 +598,29 @@ const main = async () => {
     });
   }));
 
+  app.post('/api/datasets/:datasetId/live-tracks', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    const body = requireJsonBodyObject({ body: req.body, correlationId: req.correlationId });
+    sendJson({
+      res,
+      status: 201,
+      body: {
+        ok: true,
+        track: await trackService.createLiveTrack({
+          datasetId: req.params.datasetId,
+          user: auth.user,
+          name: body.name,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
   app.patch('/api/datasets/:datasetId', asyncHandler(async (req, res) => {
     const auth = requireMutationAuth({
       req,
@@ -494,7 +656,17 @@ const main = async () => {
       user: auth.user,
       correlationId: req.correlationId
     });
-    await queryService.invalidateDatasets({ datasetIds: [req.params.datasetId] });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [req.params.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::datasets::delete::invalidateDatasets',
+      reason: 'Failed invalidating dataset cache after delete.',
+      context: {
+        datasetId: req.params.datasetId
+      }
+    });
     sendJson({ res, body: { ok: true } });
   }));
 
@@ -547,9 +719,21 @@ const main = async () => {
       geometry: body.geometry,
       label: body.label ?? null,
       applyByDefaultOnExport: Boolean(body.applyByDefaultOnExport),
+      effectType: body.effectType ?? 'hard_remove',
+      compressMinPoints: body.compressMinPoints ?? null,
+      compressMaxPoints: body.compressMaxPoints ?? null,
       correlationId: req.correlationId
     });
-    await queryService.invalidateDatasets({ datasetIds: [req.params.datasetId] });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [req.params.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::excludeAreas::create::invalidateDatasets',
+      context: {
+        datasetId: req.params.datasetId
+      }
+    });
     sendJson({ res, status: 201, body: { ok: true } });
   }));
 
@@ -566,7 +750,17 @@ const main = async () => {
       user: auth.user,
       correlationId: req.correlationId
     });
-    await queryService.invalidateDatasets({ datasetIds: [req.params.datasetId] });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [req.params.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::excludeAreas::delete::invalidateDatasets',
+      context: {
+        datasetId: req.params.datasetId,
+        excludeAreaId: req.params.excludeAreaId
+      }
+    });
     sendJson({ res, body: { ok: true } });
   }));
 
@@ -654,6 +848,212 @@ const main = async () => {
     sendJson({ res, body: { ok: true } });
   }));
 
+  app.get('/api/tracks/:trackId', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        track: await trackService.getTrackDetail({
+          trackId: req.params.trackId,
+          user: auth.user,
+          limit: req.query.limit,
+          offset: req.query.offset,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
+  app.delete('/api/tracks/:trackId', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    const result = await trackService.deleteTrack({
+      trackId: req.params.trackId,
+      user: auth.user,
+      correlationId: req.correlationId
+    });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [result.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::tracks::delete::invalidateDatasets',
+      context: {
+        datasetId: result.datasetId,
+        trackId: req.params.trackId
+      }
+    });
+    sendJson({ res, body: { ok: true } });
+  }));
+
+  app.patch('/api/tracks/:trackId/readings/:readingId', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    const body = requireJsonBodyObject({ body: req.body, correlationId: req.correlationId });
+    const result = await trackService.updateTrackReading({
+      trackId: req.params.trackId,
+      readingId: req.params.readingId,
+      user: auth.user,
+      occurredAt: body.occurredAt ?? null,
+      latitude: body.latitude,
+      longitude: body.longitude,
+      accuracy: body.accuracy ?? null,
+      altitudeMeters: body.altitudeMeters ?? null,
+      usv: body.usv ?? null,
+      countRate: body.countRate ?? null,
+      comment: body.comment ?? null,
+      correlationId: req.correlationId
+    });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [result.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::tracks::readings::patch::invalidateDatasets',
+      context: {
+        datasetId: result.datasetId,
+        trackId: req.params.trackId,
+        readingId: req.params.readingId
+      }
+    });
+    sendJson({ res, body: { ok: true, reading: result.reading } });
+  }));
+
+  app.post('/api/tracks/:trackId/restore-original', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    const result = await trackService.restoreTrackOriginal({
+      trackId: req.params.trackId,
+      user: auth.user,
+      correlationId: req.correlationId
+    });
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds: [result.datasetId],
+      correlationId: req.correlationId,
+      caller: 'api::tracks::restoreOriginal::invalidateDatasets',
+      context: {
+        datasetId: result.datasetId,
+        trackId: req.params.trackId
+      }
+    });
+    sendJson({ res, body: { ok: true } });
+  }));
+
+  app.post('/api/tracks/:trackId/shares', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    const body = requireJsonBodyObject({ body: req.body, correlationId: req.correlationId });
+    await trackService.upsertTrackShare({
+      trackId: req.params.trackId,
+      user: auth.user,
+      targetUserId: body.targetUserId,
+      accessLevel: body.accessLevel,
+      correlationId: req.correlationId
+    });
+    sendJson({ res, body: { ok: true } });
+  }));
+
+  app.delete('/api/tracks/:trackId/shares/:shareId', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    await trackService.removeTrackShare({
+      trackId: req.params.trackId,
+      shareId: req.params.shareId,
+      user: auth.user,
+      correlationId: req.correlationId
+    });
+    sendJson({ res, body: { ok: true } });
+  }));
+
+  app.post('/api/tracks/:trackId/ingest-keys', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    const body = requireJsonBodyObject({ body: req.body, correlationId: req.correlationId });
+    sendJson({
+      res,
+      status: 201,
+      body: {
+        ok: true,
+        result: await trackService.createTrackIngestKey({
+          trackId: req.params.trackId,
+          user: auth.user,
+          label: body.label,
+          notes: body.notes ?? null,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
+  app.post('/api/tracks/:trackId/ingest-keys/:ingestKeyId/revoke', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        key: await trackService.revokeTrackIngestKey({
+          trackId: req.params.trackId,
+          keyId: req.params.ingestKeyId,
+          user: auth.user,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
+  app.post('/api/tracks/:trackId/ingest-keys/:ingestKeyId/rotate', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        result: await trackService.rotateTrackIngestKey({
+          trackId: req.params.trackId,
+          keyId: req.params.ingestKeyId,
+          user: auth.user,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
   app.post('/api/readings/hide', asyncHandler(async (req, res) => {
     const auth = requireMutationAuth({
       req,
@@ -669,9 +1069,16 @@ const main = async () => {
       correlationId: req.correlationId
     });
     const datasetIds = Array.isArray(body.datasetIds) ? body.datasetIds : [];
-    if (datasetIds.length) {
-      await queryService.invalidateDatasets({ datasetIds });
-    }
+    await invalidateDatasetsSafely({
+      logger,
+      queryService,
+      datasetIds,
+      correlationId: req.correlationId,
+      caller: 'api::readings::hide::invalidateDatasets',
+      context: {
+        readingCount: Array.isArray(body.readingIds) ? body.readingIds.length : 0
+      }
+    });
     sendJson({ res, body: { ok: true } });
   }));
 

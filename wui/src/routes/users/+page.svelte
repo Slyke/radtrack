@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import { localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
 
   let users = $state<any[]>([]);
@@ -14,12 +15,18 @@
     password: ''
   });
 
+  const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
+    key,
+    values,
+    messages: $localeStore.messages
+  });
+
   const loadUsers = async () => {
     try {
       const response = await apiFetch<any>({ path: '/api/users' });
       users = response.users;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : 'Failed to load users';
+      errorMessage = error instanceof Error ? error.message : t('radiacode-users_failed');
     }
   };
 
@@ -73,8 +80,8 @@
 
 <div class="page-header">
   <div>
-    <h1>User Management</h1>
-    <p class="muted">Moderators can disable accounts and reset passwords. Admins can also create users and manage identities.</p>
+    <h1>{t('radiacode-users_title')}</h1>
+    <p class="muted">{t('radiacode-users_description')}</p>
   </div>
 </div>
 
@@ -86,38 +93,38 @@
 
 {#if $sessionStore.user?.role === 'admin'}
   <section class="panel">
-    <h2>Create User</h2>
+    <h2>{t('radiacode-users_create-title')}</h2>
     <div class="form-grid">
-      <input bind:value={createForm.username} placeholder="Username" />
+      <input bind:value={createForm.username} placeholder={t('radiacode-common_username-label')} />
       <select bind:value={createForm.role}>
         <option value="view_only">view_only</option>
         <option value="standard">standard</option>
         <option value="moderator">moderator</option>
         <option value="admin">admin</option>
       </select>
-      <input bind:value={createForm.password} placeholder="Optional password" type="password" />
-      <button class="primary" onclick={createUser}>Create user</button>
+      <input bind:value={createForm.password} placeholder={t('radiacode-users_optional_password-placeholder')} type="password" />
+      <button class="primary" onclick={createUser}>{t('radiacode-users_create-title')}</button>
     </div>
   </section>
 {/if}
 
 {#if resetPasswordResult}
   <section class="panel">
-    <h2>Generated Password</h2>
+    <h2>{t('radiacode-users_generated_password-title')}</h2>
     <code>{resetPasswordResult}</code>
   </section>
 {/if}
 
 <section class="panel">
-  <h2>Users</h2>
+  <h2>{t('radiacode-layout_nav-users-label')}</h2>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>Username</th>
-          <th>Role</th>
-          <th>Flags</th>
-          <th>Identities</th>
+          <th>{t('radiacode-common_username-label')}</th>
+          <th>{t('radiacode-common_role-label')}</th>
+          <th>{t('radiacode-common_flags-label')}</th>
+          <th>{t('radiacode-common_identities-label')}</th>
           <th></th>
         </tr>
       </thead>
@@ -145,8 +152,8 @@
             </td>
             <td>
               <div class="actions">
-                <button class="warning" onclick={() => toggleDisabled(user)}>{user.isDisabled ? 'Enable' : 'Disable'}</button>
-                <button class="danger" onclick={() => resetPassword(user.id)}>Reset password</button>
+                <button class="warning" onclick={() => toggleDisabled(user)}>{user.isDisabled ? t('radiacode-users_enable-button') : t('radiacode-users_disable-button')}</button>
+                <button class="danger" onclick={() => resetPassword(user.id)}>{t('radiacode-users_reset_password-button')}</button>
               </div>
             </td>
           </tr>

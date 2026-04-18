@@ -32,6 +32,8 @@ For direct host-side development without compose:
 
 The compose `up` scripts inject the current git short hash into the API and WUI as `RADIACODE_BUILD_COMMIT`, so container startup logs, health endpoints, and the WUI footer use the same build label format without needing `.git` inside the container.
 
+The development compose stack bind-mounts source from the host into the containers. The API mounts `api/` directly and runs a legacy-watch `nodemon` process for bind-mount-safe restarts. The WUI mounts the repo root so `.svelte-kit` generated files can resolve the workspace-root `node_modules`, clears stale generated caches on startup, and enables polling in Vite so host edits trigger reloads reliably under Docker.
+
 ## Verification Targets
 
 - API startup logs build label and enabled auth modes
@@ -40,6 +42,7 @@ The compose `up` scripts inject the current git short hash into the API and WUI 
 - `GET /wui-health` remains available as a compatibility alias for the WUI
 - `GET /api/build` returns version, commit hash, and label
 - WUI shows the build label in the shell footer
+- The default WUI host port is `4096`
 - single `.rctrk`, bulk `.rctrk`, `.zip`, and `.zrctrk` imports complete
 - aggregate queries warm and reuse Redis cache entries
 - export applies exclusion areas when requested

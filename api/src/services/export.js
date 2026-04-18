@@ -1,3 +1,4 @@
+import { getBuildInfo } from '../lib/build-info.js';
 import { createAppError } from '../lib/errors.js';
 
 export const createExportService = ({ queryService, settingsService }) => {
@@ -15,10 +16,12 @@ export const createExportService = ({ queryService, settingsService }) => {
     }
 
     const uiConfig = await settingsService.getUiConfig();
+    const buildInfo = getBuildInfo();
     const envelope = {
       title: 'Radiacode Track Export',
       type: 'radiacode-export',
       exportTime: new Date().toISOString(),
+      build: buildInfo.label,
       metric: input?.metric ?? uiConfig.defaultMetric,
       filters: {
         datasetIds: input?.datasetIds ?? [],
