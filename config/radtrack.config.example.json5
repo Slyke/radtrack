@@ -6,23 +6,23 @@
   },
   database: {
     postgres: {
-      host: "postgres",
+      host: "localhost",
       port: 5432,
-      database: "radiacode",
-      user: "radiacode"
+      database: "radtrack",
+      user: "radtrack"
     }
   },
   redis: {
-    url: "redis://redis:6379"
+    url: "redis://localhost:6379"
   },
   auth: {
     localEnabled: true,
-    oidcEnabled: true,
+    oidcEnabled: false,
     headerEnabled: false,
     oidc: {
-      issuer: "https://login.example.com/realms/radiacode",
-      clientId: "radiacode",
-      callbackUrl: "http://localhost:8192/auth/callback",
+      issuer: "",
+      clientId: "",
+      callbackUrl: "",
       scopes: ["openid", "profile", "email"]
     },
     header: {

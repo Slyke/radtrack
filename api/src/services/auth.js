@@ -6,8 +6,8 @@ import { hashPassword, normalizeUsername, safeCompare, verifyPassword } from '..
 import { parseCookies, serializeCookie } from '../utils/http.js';
 import { isRole } from './permissions.js';
 
-const sessionCookieName = 'radiacode_session';
-const csrfCookieName = 'radiacode_csrf';
+const sessionCookieName = 'radtrack_session';
+const csrfCookieName = 'radtrack_csrf';
 const sessionLifetimeSeconds = 31 * 24 * 60 * 60;
 
 const base64Url = (buffer) => buffer.toString('base64url');

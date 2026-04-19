@@ -54,13 +54,13 @@ const asInteger = ({ value, fallback }) => {
 };
 
 export const loadRuntimeConfig = async ({ correlationId = null } = {}) => {
-  const configPath = process.env.RADIACODE_CONFIG_PATH ?? '';
-  const secretsPath = process.env.RADIACODE_SECRETS_PATH ?? '';
+  const configPath = process.env.RADTRACK_CONFIG_PATH ?? '';
+  const secretsPath = process.env.RADTRACK_SECRETS_PATH ?? '';
 
   if (!configPath || !secretsPath) {
     throw createAppError({
       caller: 'config::loadRuntimeConfig',
-      reason: 'RADIACODE_CONFIG_PATH and RADIACODE_SECRETS_PATH are required.',
+      reason: 'RADTRACK_CONFIG_PATH and RADTRACK_SECRETS_PATH are required.',
       errorKey: 'CONFIG_LOAD_FAILED',
       correlationId,
       context: { configPath, secretsPath }

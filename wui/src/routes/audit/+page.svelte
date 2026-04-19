@@ -57,7 +57,7 @@
   const formatTime = (value: string | null | undefined) => formatDateTime({
     value,
     language: $localeStore.language
-  }) ?? t('radiacode-common_none');
+  }) ?? t('radtrack-common_none');
 
   const formatEntity = (entry: Pick<AuditEntry, 'entityType' | 'entityId'>) => (
     `${entry.entityType}${entry.entityId ? `:${entry.entityId}` : ''}`
@@ -77,7 +77,7 @@
   };
 
   const formatLimitLabel = (value: string) => (
-    value === 'all' ? t('radiacode-common_all-label') : value
+    value === 'all' ? t('radtrack-common_all-label') : value
   );
 
   const extractMetadata = (payload: unknown) => (
@@ -102,7 +102,7 @@
 
   const openPayloadModal = (entry: AuditEntry) => {
     openJsonModal({
-      title: t('radiacode-audit_payload_modal-title'),
+      title: t('radtrack-audit_payload_modal-title'),
       description: `${entry.eventType} · ${formatEntity(entry)} · ${formatTime(entry.createdAt)}`,
       value: formatJson(entry.payload)
     });
@@ -110,7 +110,7 @@
 
   const openMetadataModal = (entry: AuditEntry) => {
     openJsonModal({
-      title: t('radiacode-audit_metadata_modal-title'),
+      title: t('radtrack-audit_metadata_modal-title'),
       description: `${entry.eventType} · ${formatEntity(entry)} · ${formatTime(entry.createdAt)}`,
       value: formatJson(extractMetadata(entry.payload))
     });
@@ -141,7 +141,7 @@
       hasMore = response.hasMore;
       limit = response.limitValue;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-audit_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-audit_failed');
     }
   };
 
@@ -150,15 +150,15 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radiacode-audit_title')}</h1>
-    <p class="muted">{t('radiacode-audit_description')}</p>
+    <h1>{t('radtrack-audit_title')}</h1>
+    <p class="muted">{t('radtrack-audit_description')}</p>
     <div class="chip-row audit-meta-row">
       <span class="chip subtle">
-        {t('radiacode-audit_showing_summary', {
-          limit: limit === 'all' ? t('radiacode-common_all-label') : limit
+        {t('radtrack-audit_showing_summary', {
+          limit: limit === 'all' ? t('radtrack-common_all-label') : limit
         })}
       </span>
-      <span class="chip subtle">{t('radiacode-audit_total_entries-label', { count: totalEntries })}</span>
+      <span class="chip subtle">{t('radtrack-audit_total_entries-label', { count: totalEntries })}</span>
     </div>
   </div>
 </div>
@@ -171,11 +171,11 @@
 
 <section class="panel">
   <div class="page-header audit-toolbar">
-    <h2>{t('radiacode-common_recent_audit-label')}</h2>
+    <h2>{t('radtrack-common_recent_audit-label')}</h2>
 
     <div class="actions audit-actions">
       <label class="audit-limit-field">
-        <span class="muted">{t('radiacode-audit_limit-label')}</span>
+        <span class="muted">{t('radtrack-audit_limit-label')}</span>
         <select bind:value={limit} onchange={loadEntries}>
           {#each limitOptions as option}
             <option value={option}>{formatLimitLabel(option)}</option>
@@ -183,7 +183,7 @@
         </select>
       </label>
 
-      <button class="primary audit-export-button" onclick={downloadAudit} type="button">{t('radiacode-audit_export-button')}</button>
+      <button class="primary audit-export-button" onclick={downloadAudit} type="button">{t('radtrack-audit_export-button')}</button>
     </div>
   </div>
 
@@ -199,25 +199,25 @@
       </colgroup>
       <thead>
         <tr>
-          <th>{t('radiacode-common_time-label')}</th>
-          <th>{t('radiacode-common_actor-label')}</th>
-          <th>{t('radiacode-common_event-label')}</th>
-          <th>{t('radiacode-common_entity-label')}</th>
-          <th>{t('radiacode-common_metadata-label')}</th>
-          <th>{t('radiacode-common_payload-label')}</th>
+          <th>{t('radtrack-common_time-label')}</th>
+          <th>{t('radtrack-common_actor-label')}</th>
+          <th>{t('radtrack-common_event-label')}</th>
+          <th>{t('radtrack-common_entity-label')}</th>
+          <th>{t('radtrack-common_metadata-label')}</th>
+          <th>{t('radtrack-common_payload-label')}</th>
         </tr>
       </thead>
       <tbody>
         {#if !entries.length}
           <tr>
-            <td colspan="6" class="muted audit-empty-cell">{t('radiacode-audit_empty')}</td>
+            <td colspan="6" class="muted audit-empty-cell">{t('radtrack-audit_empty')}</td>
           </tr>
         {:else}
           {#each entries as entry}
             {@const metadata = extractMetadata(entry.payload)}
             <tr>
               <td>{formatTime(entry.createdAt)}</td>
-              <td>{entry.actorUsername ?? entry.actorUserId ?? t('radiacode-common_none')}</td>
+              <td>{entry.actorUsername ?? entry.actorUserId ?? t('radtrack-common_none')}</td>
               <td>{entry.eventType}</td>
               <td>{formatEntity(entry)}</td>
               <td class="audit-json-cell">
@@ -225,25 +225,25 @@
                   <button
                     class="json-preview-button"
                     onclick={() => openMetadataModal(entry)}
-                    title={t('radiacode-audit_metadata_open-button')}
+                    title={t('radtrack-audit_metadata_open-button')}
                     type="button"
                   >
                     <code class="json-preview-code">{formatJsonPreview(metadata)}</code>
-                    <span class="json-preview-action faint">{t('radiacode-audit_metadata_open-button')}</span>
+                    <span class="json-preview-action faint">{t('radtrack-audit_metadata_open-button')}</span>
                   </button>
                 {:else}
-                  <span class="faint">{t('radiacode-common_none')}</span>
+                  <span class="faint">{t('radtrack-common_none')}</span>
                 {/if}
               </td>
               <td class="audit-json-cell">
                 <button
                   class="json-preview-button"
                   onclick={() => openPayloadModal(entry)}
-                  title={t('radiacode-audit_payload_open-button')}
+                  title={t('radtrack-audit_payload_open-button')}
                   type="button"
                 >
                   <code class="json-preview-code">{formatJsonPreview(entry.payload)}</code>
-                  <span class="json-preview-action faint">{t('radiacode-audit_payload_open-button')}</span>
+                  <span class="json-preview-action faint">{t('radtrack-audit_payload_open-button')}</span>
                 </button>
               </td>
             </tr>
@@ -254,14 +254,14 @@
   </div>
 
   {#if hasMore}
-    <p class="muted audit-footer-note">{t('radiacode-audit_has_more')}</p>
+    <p class="muted audit-footer-note">{t('radtrack-audit_has_more')}</p>
   {/if}
 </section>
 
 {#if selectedJson}
   <div class="audit-modal-shell" role="presentation">
     <button
-      aria-label={t('radiacode-common_close-button')}
+      aria-label={t('radtrack-common_close-button')}
       class="audit-modal-backdrop"
       onclick={closeJsonModal}
       type="button"
@@ -279,7 +279,7 @@
           <h2 id="audit-json-modal-title">{selectedJson.title}</h2>
           <p class="muted">{selectedJson.description}</p>
         </div>
-        <button onclick={closeJsonModal} type="button">{t('radiacode-common_close-button')}</button>
+        <button onclick={closeJsonModal} type="button">{t('radtrack-common_close-button')}</button>
       </div>
 
       <textarea class="audit-modal-text" readonly rows="20" value={selectedJson.value}></textarea>

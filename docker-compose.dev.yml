@@ -1,9 +1,9 @@
 services:
-  radiacode-api:
+  radtrack-api:
     build:
       context: ./api
       dockerfile: Dockerfile.dev
-    container_name: radiacode-api-dev
+    container_name: radtrack-api-dev
     working_dir: /workspace
     command:
       - bash
@@ -13,13 +13,13 @@ services:
       PORT: "8192"
       TRUST_PROXY: "0"
       MONOLITH: "false"
-      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
-      RADIACODE_CONFIG_PATH: /config/radiacode.config.json5
-      RADIACODE_SECRETS_PATH: /config/radiacode.secrets.json5
+      RADTRACK_BUILD_COMMIT: ${RADTRACK_BUILD_COMMIT:-unknown}
+      RADTRACK_CONFIG_PATH: /config/radtrack.config.json5
+      RADTRACK_SECRETS_PATH: /config/radtrack.secrets.json5
       LOG_CONSOLE_FORMAT: text
     volumes:
       - ./api:/workspace
-      - radiacode-api-node-modules:/workspace/node_modules
+      - radtrack-api-node-modules:/workspace/node_modules
       - ./config/compose/gui-api:/config:ro
     ports:
       - "8192:8192"
@@ -28,51 +28,51 @@ services:
       - redis
     restart: unless-stopped
 
-  radiacode-wui:
+  radtrack-wui:
     image: node:24-bookworm-slim
-    container_name: radiacode-wui-dev
+    container_name: radtrack-wui-dev
     working_dir: /workspace
     command:
       - bash
       - /workspace/wui/scripts/dev-entrypoint.sh
     environment:
       PUBLIC_API_URL: ""
-      INTERNAL_API_URL: http://radiacode-api:8192
+      INTERNAL_API_URL: http://radtrack-api:8192
       PORT: "4096"
-      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
+      RADTRACK_BUILD_COMMIT: ${RADTRACK_BUILD_COMMIT:-unknown}
       CHOKIDAR_USEPOLLING: "true"
       CHOKIDAR_INTERVAL: "300"
     volumes:
       - ./:/workspace
-      - radiacode-wui-node-modules:/workspace/node_modules
+      - radtrack-wui-node-modules:/workspace/node_modules
     ports:
       - "4096:4096"
     restart: unless-stopped
 
   postgres:
     image: postgres:16
-    container_name: radiacode-postgres-dev
+    container_name: radtrack-postgres-dev
     environment:
-      POSTGRES_USER: radiacode
-      POSTGRES_PASSWORD: radiacode
-      POSTGRES_DB: radiacode
+      POSTGRES_USER: radtrack
+      POSTGRES_PASSWORD: radtrack
+      POSTGRES_DB: radtrack
     ports:
       - "5432:5432"
     volumes:
-      - radiacode-postgres-dev:/var/lib/postgresql/data
+      - radtrack-postgres-dev:/var/lib/postgresql/data
     restart: unless-stopped
 
   redis:
     image: redis:7
-    container_name: radiacode-redis-dev
+    container_name: radtrack-redis-dev
     ports:
       - "6379:6379"
     volumes:
-      - radiacode-redis-dev:/data
+      - radtrack-redis-dev:/data
     restart: unless-stopped
 
 volumes:
-  radiacode-api-node-modules:
-  radiacode-wui-node-modules:
-  radiacode-postgres-dev:
-  radiacode-redis-dev:
+  radtrack-api-node-modules:
+  radtrack-wui-node-modules:
+  radtrack-postgres-dev:
+  radtrack-redis-dev:

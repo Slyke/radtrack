@@ -25,7 +25,7 @@
       await bootstrapSession();
       await goto('/dashboard');
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-login_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-login_failed');
     } finally {
       busy = false;
     }
@@ -36,8 +36,8 @@
   <section class="panel login-card">
     <div class="page-header">
       <div>
-        <h1>{t('radiacode-login_title')}</h1>
-        <p class="muted">{t('radiacode-login_description')}</p>
+        <h1>{t('radtrack-login_title')}</h1>
+        <p class="muted">{t('radtrack-login_description')}</p>
       </div>
       <code>{$sessionStore.build?.label ?? 'v0.0.1-unknown'}</code>
     </div>
@@ -49,27 +49,27 @@
           submit();
         }}>
           <label>
-            <div class="muted">{t('radiacode-common_username-label')}</div>
+            <div class="muted">{t('radtrack-common_username-label')}</div>
             <input bind:value={username} autocomplete="username" />
           </label>
           <label>
-            <div class="muted">{t('radiacode-common_password-label')}</div>
+            <div class="muted">{t('radtrack-common_password-label')}</div>
             <input bind:value={password} autocomplete="current-password" type="password" />
           </label>
           <div class="actions">
-            <button class="primary" disabled={busy} type="submit">{t('radiacode-common_sign_in_locally-button')}</button>
+            <button class="primary" disabled={busy} type="submit">{t('radtrack-common_sign_in_locally-button')}</button>
           </div>
         </form>
       {/if}
 
       {#if $sessionStore.authModes.oidc}
         <div class="actions">
-          <button class="mid" onclick={() => startOidcLogin({ redirectTo: '/dashboard' })}>{t('radiacode-login_continue_oidc-button')}</button>
+          <button class="mid" onclick={() => startOidcLogin({ redirectTo: '/dashboard' })}>{t('radtrack-login_continue_oidc-button')}</button>
         </div>
       {/if}
 
       {#if $sessionStore.authModes.header}
-        <p class="muted">{t('radiacode-login_header_auth-description')}</p>
+        <p class="muted">{t('radtrack-login_header_auth-description')}</p>
       {/if}
 
       {#if errorMessage}

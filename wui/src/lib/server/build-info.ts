@@ -103,7 +103,7 @@ export const getBuildInfo = () => {
   }
 
   const version = resolveVersion();
-  const commitHash = process.env.RADIACODE_BUILD_COMMIT?.trim()
+  const commitHash = process.env.RADTRACK_BUILD_COMMIT?.trim()
     || resolveHeadCommit({ gitDir: resolveGitDir({ startDir: rootDir }) })
     || 'unknown';
   cachedBuildInfo = {

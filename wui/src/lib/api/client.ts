@@ -167,12 +167,16 @@ export const uploadImport = ({
   files,
   datasetName,
   description,
+  splitBulkArchivesIntoDatasets,
+  advancedTrackDeduplication,
   csrf,
   onProgress
 }: {
   files: File[];
   datasetName: string;
   description: string;
+  splitBulkArchivesIntoDatasets: boolean;
+  advancedTrackDeduplication: boolean;
   csrf: SessionPayload['csrf'];
   onProgress?: (percent: number) => void;
 }) => new Promise<unknown>((resolve, reject) => {
@@ -218,6 +222,8 @@ export const uploadImport = ({
   if (description) {
     formData.append('description', description);
   }
+  formData.append('splitBulkArchivesIntoDatasets', String(splitBulkArchivesIntoDatasets));
+  formData.append('advancedTrackDeduplication', String(advancedTrackDeduplication));
   for (const file of files) {
     formData.append('files', file, file.name);
   }

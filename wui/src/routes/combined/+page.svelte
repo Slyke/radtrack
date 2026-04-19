@@ -30,7 +30,7 @@
       datasets = datasetResponse.datasets;
       combinedDatasets = combinedResponse.combinedDatasets;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-combined_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-combined_failed');
     }
   };
 
@@ -54,8 +54,8 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radiacode-combined_title')}</h1>
-    <p class="muted">{t('radiacode-combined_description')}</p>
+    <h1>{t('radtrack-combined_title')}</h1>
+    <p class="muted">{t('radtrack-combined_description')}</p>
   </div>
 </div>
 
@@ -67,34 +67,34 @@
 
 <section class="grid cols-2">
   <article class="panel">
-    <h2>{t('radiacode-combined_create-title')}</h2>
+    <h2>{t('radtrack-combined_create-title')}</h2>
     <div class="form-grid">
-      <input bind:value={form.name} placeholder={t('radiacode-common_name-label')} />
-      <textarea bind:value={form.description} placeholder={t('radiacode-common_description-label')}></textarea>
+      <input bind:value={form.name} placeholder={t('radtrack-common_name-label')} />
+      <textarea bind:value={form.description} placeholder={t('radtrack-common_description-label')}></textarea>
       <select bind:value={form.datasetIds} multiple size="10">
         {#each datasets as dataset}
           <option value={dataset.id}>{dataset.name}</option>
         {/each}
       </select>
-      <button class="primary" onclick={createCombinedDataset}>{t('radiacode-combined_create-button')}</button>
+      <button class="primary" onclick={createCombinedDataset}>{t('radtrack-combined_create-button')}</button>
     </div>
   </article>
 
   <article class="panel">
-    <h2>{t('radiacode-combined_yours-title')}</h2>
+    <h2>{t('radtrack-combined_yours-title')}</h2>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>{t('radiacode-common_name-label')}</th>
-            <th>{t('radiacode-common_description-label')}</th>
+            <th>{t('radtrack-common_name-label')}</th>
+            <th>{t('radtrack-common_description-label')}</th>
           </tr>
         </thead>
         <tbody>
           {#each combinedDatasets as combinedDataset}
             <tr>
               <td>{combinedDataset.name}</td>
-              <td>{combinedDataset.description || t('radiacode-common_no-description')}</td>
+              <td>{combinedDataset.description || t('radtrack-common_no-description')}</td>
             </tr>
           {/each}
         </tbody>

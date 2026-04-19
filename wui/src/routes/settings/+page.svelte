@@ -23,7 +23,7 @@
       bootstrapInfo = response.bootstrap;
       settings = response.settings;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-settings_failed_load');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-settings_failed_load');
     }
   };
 
@@ -43,7 +43,7 @@
       });
       await loadSettings();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-settings_failed_save');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-settings_failed_save');
     }
   };
 
@@ -52,8 +52,8 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radiacode-settings_title')}</h1>
-    <p class="muted">{t('radiacode-settings_description')}</p>
+    <h1>{t('radtrack-settings_title')}</h1>
+    <p class="muted">{t('radtrack-settings_description')}</p>
   </div>
 </div>
 
@@ -65,28 +65,28 @@
 
 <section class="grid cols-2">
   <article class="panel">
-    <h2>{t('radiacode-settings_bootstrap-title')}</h2>
+    <h2>{t('radtrack-settings_bootstrap-title')}</h2>
     <pre>{JSON.stringify(bootstrapInfo, null, 2)}</pre>
   </article>
 
   <article class="panel">
-    <h2>{t('radiacode-settings_update-title')}</h2>
+    <h2>{t('radtrack-settings_update-title')}</h2>
     <div class="form-grid">
       <textarea bind:value={updatesJson}></textarea>
-      <button class="primary" onclick={saveSettings}>{t('radiacode-common_save-button')}</button>
+      <button class="primary" onclick={saveSettings}>{t('radtrack-common_save-button')}</button>
     </div>
   </article>
 </section>
 
 <section class="panel">
-  <h2>{t('radiacode-settings_current_runtime-title')}</h2>
+  <h2>{t('radtrack-settings_current_runtime-title')}</h2>
   <div class="table-wrap">
     <table>
       <thead>
         <tr>
-          <th>{t('radiacode-common_name-label')}</th>
-          <th>{t('radiacode-common_value-label')}</th>
-          <th>{t('radiacode-common_source-label')}</th>
+          <th>{t('radtrack-common_name-label')}</th>
+          <th>{t('radtrack-common_value-label')}</th>
+          <th>{t('radtrack-common_source-label')}</th>
         </tr>
       </thead>
       <tbody>

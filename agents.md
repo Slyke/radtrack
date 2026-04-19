@@ -1,4 +1,4 @@
-# Radiacode Agent Guide
+# RadTrack Agent Guide
 
 Before changing code, read these files in order:
 
@@ -28,7 +28,7 @@ Before changing code, read these files in order:
 
 - Keep the UI token-driven, monospace, and rooted in `html[data-theme]` and `html[data-font]`.
 - Keep backend auth, permission checks, CSRF, import validation, and export authorization server-owned.
-- Keep JSON5 config and secrets file locations env-driven through `RADIACODE_CONFIG_PATH` and `RADIACODE_SECRETS_PATH`.
+- Keep JSON5 config and secrets file locations env-driven through `RADTRACK_CONFIG_PATH` and `RADTRACK_SECRETS_PATH`.
 - Keep DB-backed settings as the runtime source for mutable non-secret behavior.
 - Keep combined datasets virtual in `v0.0.1`.
 - Keep PostGIS optional, not required.

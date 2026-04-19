@@ -71,8 +71,8 @@
     messages: $localeStore.messages
   });
 
-  const trackSourceLabel = (sourceType: string) => t('radiacode-track_source_type-label', {
-    type: t(`radiacode-track_source_type-${sourceType}`)
+  const trackSourceLabel = (sourceType: string) => t('radtrack-track_source_type-label', {
+    type: t(`radtrack-track_source_type-${sourceType}`)
   });
 
   const loadDetail = async () => {
@@ -85,7 +85,7 @@
       shareTargets = shareTargetsResponse.users;
       errorMessage = null;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dataset_detail_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_detail_failed');
     }
   };
 
@@ -106,7 +106,7 @@
       };
       await loadDetail();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dataset_live_track_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_live_track_failed');
     }
   };
 
@@ -128,7 +128,7 @@
       };
       await loadDetail();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dataset_share_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_share_failed');
     }
   };
 
@@ -145,7 +145,7 @@
       });
       await loadDetail();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dataset_share_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_share_failed');
     }
   };
 
@@ -170,17 +170,17 @@
     }
 
     if (!draftCircleCenter) {
-      errorMessage = t('radiacode-dataset_exclude_circle_center_required');
+      errorMessage = t('radtrack-dataset_exclude_circle_center_required');
       return;
     }
 
     if (!(draftCircleRadiusMeters > 0)) {
-      errorMessage = t('radiacode-dataset_exclude_circle_radius_required');
+      errorMessage = t('radtrack-dataset_exclude_circle_radius_required');
       return;
     }
 
     if (excludeAreaForm.effectType === 'compress' && draftCompressMaxPoints < draftCompressMinPoints) {
-      errorMessage = t('radiacode-dataset_exclude_compress_invalid_range');
+      errorMessage = t('radtrack-dataset_exclude_compress_invalid_range');
       return;
     }
 
@@ -205,7 +205,7 @@
       resetExcludeAreaDraft();
       await loadDetail();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dataset_exclude_area_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_exclude_area_failed');
     }
   };
 
@@ -222,8 +222,8 @@
       return;
     }
 
-    if (!window.confirm(t('radiacode-dataset_exclude_delete_confirm', {
-      name: label || t('radiacode-common_unnamed-label')
+    if (!window.confirm(t('radtrack-dataset_exclude_delete_confirm', {
+      name: label || t('radtrack-common_unnamed-label')
     }))) {
       return;
     }
@@ -236,7 +236,7 @@
       });
       await loadDetail();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dataset_exclude_area_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_exclude_area_failed');
     }
   };
 
@@ -245,8 +245,8 @@
       return;
     }
 
-    if (!window.confirm(t('radiacode-track_delete_confirm', {
-      name: trackName || t('radiacode-layout_track_page-label')
+    if (!window.confirm(t('radtrack-track_delete_confirm', {
+      name: trackName || t('radtrack-layout_track_page-label')
     }))) {
       return;
     }
@@ -259,7 +259,7 @@
       });
       await loadDetail();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_delete');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_delete');
     }
   };
 
@@ -268,7 +268,7 @@
       return;
     }
 
-    if (!window.confirm(t('radiacode-dataset_delete_confirm', { name: dataset.name }))) {
+    if (!window.confirm(t('radtrack-dataset_delete_confirm', { name: dataset.name }))) {
       return;
     }
 
@@ -280,7 +280,7 @@
       });
       await goto('/datasets');
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dataset_detail_failed_delete');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_detail_failed_delete');
     }
   };
 
@@ -293,48 +293,48 @@
   </section>
 {:else if !dataset}
   <section class="panel">
-    <p class="muted">{t('radiacode-common_loading_dataset')}</p>
+    <p class="muted">{t('radtrack-common_loading_dataset')}</p>
   </section>
 {:else}
   <div class="page-header">
     <div>
       <h1>{dataset.name}</h1>
-      <p class="muted">{dataset.description || t('radiacode-common_no-description')}</p>
+      <p class="muted">{dataset.description || t('radtrack-common_no-description')}</p>
     </div>
     <div class="chip-row">
       <span class="chip start">{dataset.accessLevel}</span>
-      <a class="button-link" href="/map">{t('radiacode-dataset_detail_open_map-button')}</a>
+      <a class="button-link" href="/map">{t('radtrack-dataset_detail_open_map-button')}</a>
       {#if dataset.accessLevel === 'edit'}
-        <button class="danger" onclick={deleteDataset}>{t('radiacode-common_danger-delete-button')}</button>
+        <button class="danger" onclick={deleteDataset}>{t('radtrack-common_danger-delete-button')}</button>
       {/if}
     </div>
   </div>
 
   <section class="panel">
     <div class="page-header">
-      <h2>{t('radiacode-common_tracks-label')}</h2>
+      <h2>{t('radtrack-common_tracks-label')}</h2>
       {#if dataset.accessLevel === 'edit'}
-        <a class="button-link" href="#live-track-form">{t('radiacode-dataset_live_track_create-button')}</a>
+        <a class="button-link" href="#live-track-form">{t('radtrack-dataset_live_track_create-button')}</a>
       {/if}
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>{t('radiacode-common_name-label')}</th>
-            <th>{t('radiacode-common_source-label')}</th>
-            <th>{t('radiacode-common_device-label')}</th>
-            <th>{t('radiacode-common_rows-label')}</th>
-            <th>{t('radiacode-common_warnings-label')}</th>
+            <th>{t('radtrack-common_name-label')}</th>
+            <th>{t('radtrack-common_source-label')}</th>
+            <th>{t('radtrack-common_device-label')}</th>
+            <th>{t('radtrack-common_rows-label')}</th>
+            <th>{t('radtrack-common_warnings-label')}</th>
             {#if dataset.accessLevel === 'edit'}
-              <th>{t('radiacode-common_actions-label')}</th>
+              <th>{t('radtrack-common_actions-label')}</th>
             {/if}
           </tr>
         </thead>
         <tbody>
           {#if !dataset.tracks.length}
             <tr>
-              <td colspan={dataset.accessLevel === 'edit' ? 6 : 5} class="muted">{t('radiacode-dataset_tracks_empty')}</td>
+              <td colspan={dataset.accessLevel === 'edit' ? 6 : 5} class="muted">{t('radtrack-dataset_tracks_empty')}</td>
             </tr>
           {:else}
             {#each dataset.tracks as track}
@@ -348,18 +348,18 @@
                   </div>
                 </td>
                 <td>{trackSourceLabel(track.sourceType)}</td>
-                <td>{track.deviceIdentifierRaw || t('radiacode-common_na-label')}</td>
+                <td>{track.deviceIdentifierRaw || t('radtrack-common_na-label')}</td>
                 <td>{track.validRowCount}/{track.rowCount}</td>
                 <td>{track.warningCount}</td>
                 {#if dataset.accessLevel === 'edit'}
                   <td>
                     <div class="actions">
-                      <a class="button-link" href={`/tracks/${track.id}`}>{t('radiacode-common_edit-label')}</a>
+                      <a class="button-link" href={`/tracks/${track.id}`}>{t('radtrack-common_edit-label')}</a>
                       <button
                         class="danger"
                         onclick={() => deleteTrack({ trackId: track.id, trackName: track.trackName })}
                       >
-                        {t('radiacode-common_danger-delete-button')}
+                        {t('radtrack-common_danger-delete-button')}
                       </button>
                     </div>
                   </td>
@@ -373,11 +373,11 @@
 
     {#if dataset.accessLevel === 'edit'}
       <div class="form-grid" id="live-track-form">
-        <h3>{t('radiacode-dataset_live_track_create-title')}</h3>
-        <p class="muted">{t('radiacode-dataset_live_track_description')}</p>
-        <input bind:value={liveTrackForm.name} placeholder={t('radiacode-dataset_live_track_name-placeholder')} />
+        <h3>{t('radtrack-dataset_live_track_create-title')}</h3>
+        <p class="muted">{t('radtrack-dataset_live_track_description')}</p>
+        <input bind:value={liveTrackForm.name} placeholder={t('radtrack-dataset_live_track_name-placeholder')} />
         <div class="actions">
-          <button class="primary" onclick={createLiveTrack}>{t('radiacode-dataset_live_track_create-button')}</button>
+          <button class="primary" onclick={createLiveTrack}>{t('radtrack-dataset_live_track_create-button')}</button>
         </div>
       </div>
     {/if}
@@ -386,7 +386,7 @@
   <section class="panel">
     <details class="sharing-accordion">
       <summary>
-        <span>{t('radiacode-dataset_sharing-title')}</span>
+        <span>{t('radtrack-dataset_sharing-title')}</span>
         <span class="exclude-editor-summary">
           <span class="chip subtle">{dataset.shares.length}</span>
           <span aria-hidden="true" class="exclude-editor-icon"></span>
@@ -394,12 +394,12 @@
       </summary>
 
       <div class="form-grid">
-        <p class="muted">{t('radiacode-dataset_sharing_dataset_help')}</p>
+        <p class="muted">{t('radtrack-dataset_sharing_dataset_help')}</p>
 
         {#if dataset.accessLevel === 'edit'}
           <div class="form-grid sharing-controls">
             <select bind:value={shareForm.targetUserId}>
-              <option value="">{t('radiacode-common_select_user-option')}</option>
+              <option value="">{t('radtrack-common_select_user-option')}</option>
               {#each shareTargets as target}
                 {#if target.id !== $sessionStore.user?.id}
                   <option value={target.id}>{target.username} ({target.role})</option>
@@ -407,11 +407,11 @@
               {/each}
             </select>
             <select bind:value={shareForm.accessLevel}>
-              <option value="view">{t('radiacode-common_view-label')}</option>
-              <option value="edit">{t('radiacode-common_edit-label')}</option>
+              <option value="view">{t('radtrack-common_view-label')}</option>
+              <option value="edit">{t('radtrack-common_edit-label')}</option>
             </select>
             <div class="actions">
-              <button class="primary" onclick={saveShare}>{t('radiacode-common_share-button')}</button>
+              <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
             </div>
           </div>
         {/if}
@@ -420,15 +420,15 @@
           <table>
             <thead>
               <tr>
-                <th>{t('radiacode-common_user-label')}</th>
-                <th>{t('radiacode-common_access-label')}</th>
+                <th>{t('radtrack-common_user-label')}</th>
+                <th>{t('radtrack-common_access-label')}</th>
                 <th></th>
               </tr>
             </thead>
             <tbody>
               {#if !dataset.shares.length}
                 <tr>
-                  <td colspan="3" class="muted">{t('radiacode-dataset_sharing_empty')}</td>
+                  <td colspan="3" class="muted">{t('radtrack-dataset_sharing_empty')}</td>
                 </tr>
               {:else}
                 {#each dataset.shares as share}
@@ -437,7 +437,7 @@
                     <td>{share.accessLevel}</td>
                     <td>
                       {#if dataset.accessLevel === 'edit'}
-                        <button class="danger" onclick={() => removeShare(share.id)}>{t('radiacode-common_remove-button')}</button>
+                        <button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button>
                       {/if}
                     </td>
                   </tr>
@@ -447,7 +447,7 @@
           </table>
         </div>
 
-        <p class="muted">{t('radiacode-dataset_sharing_track_help')}</p>
+        <p class="muted">{t('radtrack-dataset_sharing_track_help')}</p>
       </div>
     </details>
   </section>
@@ -456,9 +456,9 @@
     <section class="panel">
       <details class="exclude-editor-accordion">
         <summary>
-          <span>{t('radiacode-dataset_exclude_editor-title')}</span>
+          <span>{t('radtrack-dataset_exclude_editor-title')}</span>
           <span class="exclude-editor-summary">
-            <span class="chip subtle">{t('radiacode-common_circle-label')}</span>
+            <span class="chip subtle">{t('radtrack-common_circle-label')}</span>
             <span aria-hidden="true" class="exclude-editor-icon"></span>
           </span>
         </summary>
@@ -477,39 +477,39 @@
           </div>
 
           <div class="form-grid">
-            <p class="muted">{t('radiacode-dataset_exclude_editor-description')}</p>
-            <span class="chip subtle">{t('radiacode-common_circle-label')}</span>
+            <p class="muted">{t('radtrack-dataset_exclude_editor-description')}</p>
+            <span class="chip subtle">{t('radtrack-common_circle-label')}</span>
 
             <label>
-              <div class="muted">{t('radiacode-common_label-label')}</div>
-              <input bind:value={excludeAreaForm.label} placeholder={t('radiacode-common_label-placeholder')} />
+              <div class="muted">{t('radtrack-common_label-label')}</div>
+              <input bind:value={excludeAreaForm.label} placeholder={t('radtrack-common_label-placeholder')} />
             </label>
 
             <label>
-              <div class="muted">{t('radiacode-common_type-label')}</div>
+              <div class="muted">{t('radtrack-common_type-label')}</div>
               <select bind:value={excludeAreaForm.effectType}>
-                <option value="hard_remove">{t('radiacode-dataset_exclude_effect_hard_remove')}</option>
-                <option value="compress">{t('radiacode-dataset_exclude_effect_compress')}</option>
+                <option value="hard_remove">{t('radtrack-dataset_exclude_effect_hard_remove')}</option>
+                <option value="compress">{t('radtrack-dataset_exclude_effect_compress')}</option>
               </select>
             </label>
 
             <label class="checkbox-field">
               <input bind:checked={excludeAreaForm.applyByDefaultOnExport} type="checkbox" />
-              <span>{t('radiacode-common_apply_export_default-label')}</span>
+              <span>{t('radtrack-common_apply_export_default-label')}</span>
             </label>
 
             <div class="form-grid exclude-mode-panel">
-              <p class="muted">{t('radiacode-dataset_exclude_circle_help')}</p>
-              <input bind:value={circleForm.latitude} placeholder={t('radiacode-common_latitude-label')} />
-              <input bind:value={circleForm.longitude} placeholder={t('radiacode-common_longitude-label')} />
-              <input bind:value={circleForm.radiusMeters} placeholder={t('radiacode-common_radius_meters-placeholder')} />
+              <p class="muted">{t('radtrack-dataset_exclude_circle_help')}</p>
+              <input bind:value={circleForm.latitude} placeholder={t('radtrack-common_latitude-label')} />
+              <input bind:value={circleForm.longitude} placeholder={t('radtrack-common_longitude-label')} />
+              <input bind:value={circleForm.radiusMeters} placeholder={t('radtrack-common_radius_meters-placeholder')} />
 
               {#if excludeAreaForm.effectType === 'compress'}
                 <div class="grid cols-2">
-                  <input bind:value={excludeAreaForm.compressMinPoints} placeholder={t('radiacode-dataset_exclude_compress_min-placeholder')} />
-                  <input bind:value={excludeAreaForm.compressMaxPoints} placeholder={t('radiacode-dataset_exclude_compress_max-placeholder')} />
+                  <input bind:value={excludeAreaForm.compressMinPoints} placeholder={t('radtrack-dataset_exclude_compress_min-placeholder')} />
+                  <input bind:value={excludeAreaForm.compressMaxPoints} placeholder={t('radtrack-dataset_exclude_compress_max-placeholder')} />
                 </div>
-                <p class="muted">{t('radiacode-dataset_exclude_compress_help')}</p>
+                <p class="muted">{t('radtrack-dataset_exclude_compress_help')}</p>
               {/if}
 
               <div class="actions">
@@ -520,15 +520,15 @@
                     longitude: ''
                   };
                 }}>
-                  {t('radiacode-common_clear-button')}
+                  {t('radtrack-common_clear-button')}
                 </button>
               </div>
               <button class="warning" onclick={saveCircle} disabled={!draftCircleCenter}>
-                {t('radiacode-common_add_circle-button')}
+                {t('radtrack-common_add_circle-button')}
               </button>
             </div>
 
-            <button onclick={resetExcludeAreaDraft}>{t('radiacode-dataset_exclude_reset-button')}</button>
+            <button onclick={resetExcludeAreaDraft}>{t('radtrack-dataset_exclude_reset-button')}</button>
           </div>
         </div>
       </details>
@@ -536,41 +536,41 @@
   {/if}
 
   <section class="panel">
-    <h2>{t('radiacode-dataset_exclude_areas-title')}</h2>
+    <h2>{t('radtrack-dataset_exclude_areas-title')}</h2>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>{t('radiacode-common_label-label')}</th>
-            <th>{t('radiacode-common_shape-label')}</th>
-            <th>{t('radiacode-common_type-label')}</th>
-            <th>{t('radiacode-common_export_default-label')}</th>
+            <th>{t('radtrack-common_label-label')}</th>
+            <th>{t('radtrack-common_shape-label')}</th>
+            <th>{t('radtrack-common_type-label')}</th>
+            <th>{t('radtrack-common_export_default-label')}</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           {#if !dataset.excludeAreas.length}
             <tr>
-              <td colspan="5" class="muted">{t('radiacode-dataset_exclude_empty')}</td>
+              <td colspan="5" class="muted">{t('radtrack-dataset_exclude_empty')}</td>
             </tr>
           {:else}
             {#each dataset.excludeAreas as area}
               <tr>
-                <td>{area.label || t('radiacode-common_unnamed-label')}</td>
-                <td>{t(`radiacode-common_${area.shapeType}-label`)}</td>
+                <td>{area.label || t('radtrack-common_unnamed-label')}</td>
+                <td>{t(`radtrack-common_${area.shapeType}-label`)}</td>
                 <td>
                   {area.effectType === 'compress'
-                    ? t('radiacode-dataset_exclude_effect_compress_with_range', {
+                    ? t('radtrack-dataset_exclude_effect_compress_with_range', {
                       min: area.compressMinPoints ?? 2,
                       max: area.compressMaxPoints ?? 20
                     })
-                    : t('radiacode-dataset_exclude_effect_hard_remove')}
+                    : t('radtrack-dataset_exclude_effect_hard_remove')}
                 </td>
-                <td>{area.applyByDefaultOnExport ? t('radiacode-common_yes-label') : t('radiacode-common_no-label')}</td>
+                <td>{area.applyByDefaultOnExport ? t('radtrack-common_yes-label') : t('radtrack-common_no-label')}</td>
                 <td>
                   {#if dataset.accessLevel === 'edit'}
                     <button class="danger" onclick={() => removeExcludeArea(area.id, area.label)}>
-                      {t('radiacode-common_danger-delete-button')}
+                      {t('radtrack-common_danger-delete-button')}
                     </button>
                   {/if}
                 </td>

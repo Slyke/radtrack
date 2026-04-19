@@ -4,8 +4,8 @@
 
 Runtime bootstrap is intentionally minimal and env-driven:
 
-- `RADIACODE_CONFIG_PATH`
-- `RADIACODE_SECRETS_PATH`
+- `RADTRACK_CONFIG_PATH`
+- `RADTRACK_SECRETS_PATH`
 
 Both point to JSON5 files.
 
@@ -50,11 +50,11 @@ Mutable non-secret settings are seeded from bootstrap files into Postgres and th
 
 ## Sample Files
 
-- [`../config/radiacode.config.example.json5`](../config/radiacode.config.example.json5)
-- [`../config/radiacode.secrets.example.json5`](../config/radiacode.secrets.example.json5)
-- [`../config/compose/gui-api/radiacode.config.example-localauth.json5`](../config/compose/gui-api/radiacode.config.example-localauth.json5)
-- [`../config/compose/gui-api/radiacode.secrets.example-localauth.json5`](../config/compose/gui-api/radiacode.secrets.example-localauth.json5)
-- [`../config/compose/gui-api/radiacode.config.example-oidc-localauth.json5`](../config/compose/gui-api/radiacode.config.example-oidc-localauth.json5)
-- [`../config/compose/gui-api/radiacode.secrets.example-oidc.json5`](../config/compose/gui-api/radiacode.secrets.example-oidc.json5)
-- [`../config/compose/gui-api/radiacode.config.json5`](../config/compose/gui-api/radiacode.config.json5)
-- [`../config/compose/gui-api/radiacode.secrets.json5`](../config/compose/gui-api/radiacode.secrets.json5)
+- [`../config/radtrack.config.example.json5`](../config/radtrack.config.example.json5)
+- [`../config/radtrack.secrets.example.json5`](../config/radtrack.secrets.example.json5)
+- [`../config/compose/gui-api/radtrack.config.example-localauth.json5`](../config/compose/gui-api/radtrack.config.example-localauth.json5)
+- [`../config/compose/gui-api/radtrack.secrets.example-localauth.json5`](../config/compose/gui-api/radtrack.secrets.example-localauth.json5)
+- [`../config/compose/gui-api/radtrack.config.example-oidc-localauth.json5`](../config/compose/gui-api/radtrack.config.example-oidc-localauth.json5)
+- [`../config/compose/gui-api/radtrack.secrets.example-oidc.json5`](../config/compose/gui-api/radtrack.secrets.example-oidc.json5)
+- [`../config/compose/gui-api/radtrack.config.json5`](../config/compose/gui-api/radtrack.config.json5)
+- [`../config/compose/gui-api/radtrack.secrets.json5`](../config/compose/gui-api/radtrack.secrets.json5)

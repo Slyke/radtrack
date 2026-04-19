@@ -8,6 +8,8 @@ wui/.svelte-kit/
 wui/build/
 wui/.vite/
 var/
+config/compose/gui-api/radtrack.config.json5
+config/compose/gui-api/radtrack.secrets.json5
 .DS_Store
 npm-debug.log*
 yarn-debug.log*

@@ -207,6 +207,7 @@ const migrationStatements = [
   `ALTER TABLE tracks ALTER COLUMN raw_file_id DROP NOT NULL`,
   `ALTER TABLE tracks ADD COLUMN IF NOT EXISTS source_type TEXT`,
   `ALTER TABLE tracks ADD COLUMN IF NOT EXISTS ingest_track_id TEXT`,
+  `ALTER TABLE tracks ADD COLUMN IF NOT EXISTS semantic_dedupe_key TEXT`,
   `UPDATE tracks SET source_type = 'import' WHERE source_type IS NULL`,
   `ALTER TABLE tracks ALTER COLUMN source_type SET DEFAULT 'import'`,
   `ALTER TABLE tracks ALTER COLUMN source_type SET NOT NULL`,
@@ -249,6 +250,8 @@ const migrationStatements = [
   `CREATE INDEX IF NOT EXISTS idx_readings_dose_rate ON readings(dose_rate)`,
   `CREATE INDEX IF NOT EXISTS idx_readings_count_rate ON readings(count_rate)`,
   `CREATE INDEX IF NOT EXISTS idx_tracks_dataset_id ON tracks(dataset_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_tracks_owner_semantic_dedupe_key
+   ON tracks(owner_user_id, semantic_dedupe_key)`,
   `CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_owner_ingest_track_id
    ON tracks(owner_user_id, ingest_track_id)
    WHERE ingest_track_id IS NOT NULL`,
@@ -260,7 +263,9 @@ const migrationStatements = [
    WHERE source_reading_id IS NOT NULL`,
   `CREATE INDEX IF NOT EXISTS idx_dataset_shares_target_user_id ON dataset_shares(target_user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_raw_files_checksum ON raw_files(checksum)`,
+  `CREATE INDEX IF NOT EXISTS idx_raw_files_upload_batch_id ON raw_files(upload_batch_id)`,
   `CREATE INDEX IF NOT EXISTS idx_upload_batches_checksum ON upload_batches(checksum)`,
+  `CREATE INDEX IF NOT EXISTS idx_upload_batches_uploader_user_id ON upload_batches(uploader_user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_events_scope_user_id ON audit_events(scope_user_id)`
 ];

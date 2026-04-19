@@ -25,7 +25,7 @@
       const response = await apiFetch<any>({ path: '/api/datasets' });
       datasets = response.datasets;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-datasets_failed_load');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-datasets_failed_load');
     }
   };
 
@@ -44,7 +44,7 @@
       createForm = { name: '', description: '' };
       await loadDatasets();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-datasets_failed_create');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-datasets_failed_create');
     }
   };
 
@@ -53,7 +53,7 @@
       return;
     }
 
-    if (!window.confirm(t('radiacode-dataset_delete_confirm', { name: datasetName }))) {
+    if (!window.confirm(t('radtrack-dataset_delete_confirm', { name: datasetName }))) {
       return;
     }
 
@@ -65,7 +65,7 @@
       });
       await loadDatasets();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-datasets_failed_delete');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-datasets_failed_delete');
     }
   };
 
@@ -74,8 +74,8 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radiacode-datasets_title')}</h1>
-    <p class="muted">{t('radiacode-datasets_description')}</p>
+    <h1>{t('radtrack-datasets_title')}</h1>
+    <p class="muted">{t('radtrack-datasets_description')}</p>
   </div>
 </div>
 
@@ -87,27 +87,27 @@
 
 <section class="grid cols-2">
   <article class="panel">
-    <h2>{t('radiacode-datasets_create-title')}</h2>
+    <h2>{t('radtrack-datasets_create-title')}</h2>
     <div class="form-grid">
-      <input bind:value={createForm.name} placeholder={t('radiacode-common_dataset_name-label')} />
-      <textarea bind:value={createForm.description} placeholder={t('radiacode-common_description-label')}></textarea>
+      <input bind:value={createForm.name} placeholder={t('radtrack-common_dataset_name-label')} />
+      <textarea bind:value={createForm.description} placeholder={t('radtrack-common_description-label')}></textarea>
       <div class="actions">
-        <button class="primary" onclick={createDataset}>{t('radiacode-common_create-button')}</button>
+        <button class="primary" onclick={createDataset}>{t('radtrack-common_create-button')}</button>
       </div>
     </div>
   </article>
 
   <article class="panel">
-    <h2>{t('radiacode-datasets_accessible-title')}</h2>
+    <h2>{t('radtrack-datasets_accessible-title')}</h2>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>{t('radiacode-common_name-label')}</th>
-            <th>{t('radiacode-common_access-label')}</th>
-            <th>{t('radiacode-common_tracks-label')}</th>
-            <th>{t('radiacode-common_readings-label')}</th>
-            <th>{t('radiacode-common_actions-label')}</th>
+            <th>{t('radtrack-common_name-label')}</th>
+            <th>{t('radtrack-common_access-label')}</th>
+            <th>{t('radtrack-common_tracks-label')}</th>
+            <th>{t('radtrack-common_readings-label')}</th>
+            <th>{t('radtrack-common_actions-label')}</th>
           </tr>
         </thead>
         <tbody>
@@ -120,10 +120,10 @@
               <td>
                 {#if dataset.accessLevel === 'edit'}
                   <button class="danger" onclick={() => deleteDataset({ datasetId: dataset.id, datasetName: dataset.name })}>
-                    {t('radiacode-common_danger-delete-button')}
+                    {t('radtrack-common_danger-delete-button')}
                   </button>
                 {:else}
-                  <span class="muted">{t('radiacode-common_none')}</span>
+                  <span class="muted">{t('radtrack-common_none')}</span>
                 {/if}
               </td>
             </tr>

@@ -13,8 +13,8 @@
 For direct host-side development without compose:
 
 1. Set:
-   - `RADIACODE_CONFIG_PATH`
-   - `RADIACODE_SECRETS_PATH`
+   - `RADTRACK_CONFIG_PATH`
+   - `RADTRACK_SECRETS_PATH`
 2. Ensure Postgres and Redis are reachable.
 3. Run `npm run dev:local:api` and `npm run dev:local:wui`.
 
@@ -30,7 +30,7 @@ For direct host-side development without compose:
 - `npm run build`: build the WUI for monolith or production serving
 - `npm run check`: run SvelteKit type and consistency checks
 
-The compose `up` scripts inject the current git short hash into the API and WUI as `RADIACODE_BUILD_COMMIT`, so container startup logs, health endpoints, and the WUI footer use the same build label format without needing `.git` inside the container.
+The compose `up` scripts inject the current git short hash into the API and WUI as `RADTRACK_BUILD_COMMIT`, so container startup logs, health endpoints, and the WUI footer use the same build label format without needing `.git` inside the container.
 
 The development compose stack bind-mounts source from the host into the containers. The API mounts `api/` directly and runs a legacy-watch `nodemon` process for bind-mount-safe restarts. The WUI mounts the repo root so `.svelte-kit` generated files can resolve the workspace-root `node_modules`, clears stale generated caches on startup, and enables polling in Vite so host edits trigger reloads reliably under Docker.
 

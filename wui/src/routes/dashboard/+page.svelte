@@ -17,14 +17,14 @@
   const formatTime = (value: string | null | undefined) => formatDateTime({
     value,
     language: $localeStore.language
-  }) ?? t('radiacode-common_none');
+  }) ?? t('radtrack-common_none');
 
   const loadDashboard = async () => {
     try {
       const response = await apiFetch<any>({ path: '/api/dashboard' });
       data = response;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-dashboard_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-dashboard_failed');
     }
   };
 
@@ -33,8 +33,8 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radiacode-dashboard_title')}</h1>
-    <p class="muted">{t('radiacode-dashboard_description')}</p>
+    <h1>{t('radtrack-dashboard_title')}</h1>
+    <p class="muted">{t('radtrack-dashboard_description')}</p>
   </div>
 </div>
 
@@ -44,20 +44,20 @@
   </section>
 {:else if !data}
   <section class="panel">
-    <p class="muted">{t('radiacode-common_loading_dashboard')}</p>
+    <p class="muted">{t('radtrack-common_loading_dashboard')}</p>
   </section>
 {:else}
   <section class="grid cols-3">
     <article class="metric-card">
-      <div class="faint">{t('radiacode-datasets_title')}</div>
+      <div class="faint">{t('radtrack-datasets_title')}</div>
       <h2>{data.stats.datasetCount}</h2>
     </article>
     <article class="metric-card">
-      <div class="faint">{t('radiacode-dashboard_recent_uploads-title')}</div>
+      <div class="faint">{t('radtrack-dashboard_recent_uploads-title')}</div>
       <h2>{data.stats.uploadCount}</h2>
     </article>
     <article class="metric-card">
-      <div class="faint">{t('radiacode-dashboard_failed_imports-label')}</div>
+      <div class="faint">{t('radtrack-dashboard_failed_imports-label')}</div>
       <h2>{data.stats.failedImportCount}</h2>
     </article>
   </section>
@@ -65,16 +65,16 @@
   <section class="grid cols-2">
     <article class="panel">
       <div class="page-header">
-        <h2>{t('radiacode-dashboard_recent_datasets-title')}</h2>
-        <a href="/datasets">{t('radiacode-common_open-button')}</a>
+        <h2>{t('radtrack-dashboard_recent_datasets-title')}</h2>
+        <a href="/datasets">{t('radtrack-common_open-button')}</a>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>{t('radiacode-common_name-label')}</th>
-              <th>{t('radiacode-common_access-label')}</th>
-              <th>{t('radiacode-common_tracks-label')}</th>
+              <th>{t('radtrack-common_name-label')}</th>
+              <th>{t('radtrack-common_access-label')}</th>
+              <th>{t('radtrack-common_tracks-label')}</th>
             </tr>
           </thead>
           <tbody>
@@ -92,16 +92,16 @@
 
     <article class="panel">
       <div class="page-header">
-        <h2>{t('radiacode-dashboard_recent_uploads-title')}</h2>
-        <a href="/import">{t('radiacode-common_import-button')}</a>
+        <h2>{t('radtrack-dashboard_recent_uploads-title')}</h2>
+        <a href="/import">{t('radtrack-common_import-button')}</a>
       </div>
       <div class="table-wrap">
         <table>
           <thead>
             <tr>
-              <th>{t('radiacode-common_file-label')}</th>
-              <th>{t('radiacode-common_status-label')}</th>
-              <th>{t('radiacode-common_time-label')}</th>
+              <th>{t('radtrack-common_file-label')}</th>
+              <th>{t('radtrack-common_status-label')}</th>
+              <th>{t('radtrack-common_time-label')}</th>
             </tr>
           </thead>
           <tbody>
@@ -120,16 +120,16 @@
 
   <section class="panel">
     <div class="page-header">
-      <h2>{t('radiacode-audit_title')}</h2>
-      <a href="/audit">{t('radiacode-common_open-button')}</a>
+      <h2>{t('radtrack-audit_title')}</h2>
+      <a href="/audit">{t('radtrack-common_open-button')}</a>
     </div>
     <div class="table-wrap">
       <table>
         <thead>
           <tr>
-            <th>{t('radiacode-common_time-label')}</th>
-            <th>{t('radiacode-common_event-label')}</th>
-            <th>{t('radiacode-common_entity-label')}</th>
+            <th>{t('radtrack-common_time-label')}</th>
+            <th>{t('radtrack-common_event-label')}</th>
+            <th>{t('radtrack-common_entity-label')}</th>
           </tr>
         </thead>
         <tbody>

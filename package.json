@@ -1,5 +1,5 @@
 {
-  "name": "radiacode-workspace",
+  "name": "radtrack-workspace",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -12,12 +12,12 @@
   },
   "scripts": {
     "start": "npm run start --workspace api",
-    "dev": "RADIACODE_BUILD_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) docker compose -f docker-compose.dev.yml up -d --build",
+    "dev": "RADTRACK_BUILD_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) docker compose -f docker-compose.dev.yml up -d --build",
     "dev:down": "docker compose -f docker-compose.dev.yml down",
     "dev:logs": "docker compose -f docker-compose.dev.yml logs -f",
     "dev:local:api": "npm run dev --workspace api",
     "dev:local:wui": "npm run dev --workspace wui",
-    "prod:up": "RADIACODE_BUILD_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) docker compose up -d --build",
+    "prod:up": "RADTRACK_BUILD_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo unknown) docker compose up -d --build",
     "prod:down": "docker compose down",
     "build": "npm run build --workspace wui",
     "check": "npm run check --workspace wui"

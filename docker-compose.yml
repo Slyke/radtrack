@@ -1,21 +1,21 @@
 services:
-  radiacode-api:
+  radtrack-api:
     build:
       context: ./api
       dockerfile: Dockerfile
-    container_name: radiacode-api
-    hostname: radiacode-api
+    container_name: radtrack-api
+    hostname: radtrack-api
     environment:
       PORT: "8192"
       TRUST_PROXY: "0"
       MONOLITH: "false"
-      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
-      RADIACODE_CONFIG_PATH: /app/config/radiacode.config.json5
-      RADIACODE_SECRETS_PATH: /app/config/radiacode.secrets.json5
+      RADTRACK_BUILD_COMMIT: ${RADTRACK_BUILD_COMMIT:-unknown}
+      RADTRACK_CONFIG_PATH: /app/config/radtrack.config.json5
+      RADTRACK_SECRETS_PATH: /app/config/radtrack.secrets.json5
       LOG_CONSOLE_FORMAT: text
     volumes:
-      - ./config/compose/gui-api/radiacode.config.json5:/app/config/radiacode.config.json5:ro
-      - ./config/compose/gui-api/radiacode.secrets.json5:/app/config/radiacode.secrets.json5:ro
+      - ./config/compose/gui-api/radtrack.config.json5:/app/config/radtrack.config.json5:ro
+      - ./config/compose/gui-api/radtrack.secrets.json5:/app/config/radtrack.secrets.json5:ro
     ports:
       - "8192:8192"
     restart: unless-stopped
@@ -23,43 +23,43 @@ services:
       - postgres
       - redis
 
-  radiacode-wui:
+  radtrack-wui:
     build:
       context: ./wui
       dockerfile: Dockerfile
       args:
         PUBLIC_API_URL: http://localhost:8192
-    container_name: radiacode-wui
-    hostname: radiacode-wui
+    container_name: radtrack-wui
+    hostname: radtrack-wui
     environment:
       PORT: "4096"
-      RADIACODE_BUILD_COMMIT: ${RADIACODE_BUILD_COMMIT:-unknown}
+      RADTRACK_BUILD_COMMIT: ${RADTRACK_BUILD_COMMIT:-unknown}
     ports:
       - "4096:4096"
     restart: unless-stopped
 
   postgres:
     image: postgres:16
-    container_name: radiacode-postgres
+    container_name: radtrack-postgres
     environment:
-      POSTGRES_USER: radiacode
-      POSTGRES_PASSWORD: radiacode
-      POSTGRES_DB: radiacode
+      POSTGRES_USER: radtrack
+      POSTGRES_PASSWORD: radtrack
+      POSTGRES_DB: radtrack
     ports:
       - '5432:5432'
     volumes:
-      - radiacode-postgres:/var/lib/postgresql/data
+      - radtrack-postgres:/var/lib/postgresql/data
     restart: unless-stopped
 
   redis:
     image: redis:7
-    container_name: radiacode-redis
+    container_name: radtrack-redis
     ports:
       - '6379:6379'
     volumes:
-      - radiacode-redis:/data
+      - radtrack-redis:/data
     restart: unless-stopped
 
 volumes:
-  radiacode-postgres:
-  radiacode-redis:
+  radtrack-postgres:
+  radtrack-redis:

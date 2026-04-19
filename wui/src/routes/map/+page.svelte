@@ -139,9 +139,9 @@
   };
 
   const autoUpdateDebounceMs = 450;
-  const autoUpdateStorageKeyPrefix = 'radiacode.map.auto-update';
-  const autoCellSizeStorageKeyPrefix = 'radiacode.map.auto-cell-size';
-  const basemapStorageKeyPrefix = 'radiacode.map.basemap';
+  const autoUpdateStorageKeyPrefix = 'radtrack.map.auto-update';
+  const autoCellSizeStorageKeyPrefix = 'radtrack.map.auto-cell-size';
+  const basemapStorageKeyPrefix = 'radtrack.map.basemap';
   const autoCellSizeByZoom = [
     { zoom: 5, size: 20000 },
     { zoom: 6, size: 15000 },
@@ -447,11 +447,11 @@
   const formatTime = (value: string | null | undefined) => formatDateTime({
     value,
     language: $localeStore.language
-  }) ?? t('radiacode-common_none');
+  }) ?? t('radtrack-common_none');
 
   const formatNumber = (value: number | null | undefined) => {
     if (value === null || value === undefined) {
-      return t('radiacode-common_na-label');
+      return t('radtrack-common_na-label');
     }
 
     return new Intl.NumberFormat($localeStore.language, {
@@ -459,9 +459,11 @@
     }).format(value);
   };
 
+  const formatCount = (value: number) => new Intl.NumberFormat($localeStore.language).format(value);
+
   const shortId = (value: string | null | undefined) => {
     if (!value) {
-      return t('radiacode-common_none');
+      return t('radtrack-common_none');
     }
 
     return value.slice(-8);
@@ -701,17 +703,17 @@
   };
 
   const formatDatasetOptionSummary = (dataset: DatasetOption) => [
-    `${dataset.trackCount} ${t('radiacode-common_tracks-label')}`,
-    `${dataset.readingCount} ${t('radiacode-common_readings-label')}`
+    `${dataset.trackCount} ${t('radtrack-common_tracks-label')}`,
+    `${dataset.readingCount} ${t('radtrack-common_readings-label')}`
   ].join(' / ');
 
   const formatCombinedDatasetOptionSummary = (combinedDataset: CombinedDatasetOption) => [
-    t('radiacode-map_combined_member_count-label', { count: combinedDataset.memberCount })
+    t('radtrack-map_combined_member_count-label', { count: combinedDataset.memberCount })
   ].join(' / ');
 
   const formatTrackOptionSummary = (track: TrackOption) => [
     track.datasetName,
-    `${track.rowCount} ${t('radiacode-common_readings-label')}`
+    `${track.rowCount} ${t('radtrack-common_readings-label')}`
   ].join(' / ');
 
   const selectionChipClass = ({ count }: { count: number }) => count ? 'chip start' : 'chip subtle';
@@ -738,6 +740,16 @@
   const activeShape = $derived(activeQuery?.filters.shape ?? filters.shape);
   const activeAggregateStat = $derived(activeQuery?.filters.aggregateStat ?? filters.aggregateStat);
   const activeAppliedCellSizeMeters = $derived(activeQuery?.filters.appliedCellSizeMeters ?? effectiveCellSizeMeters);
+  const visibleRawPointCount = $derived.by(() => {
+    if (activeMode !== 'aggregate') {
+      return points.length;
+    }
+
+    return aggregates.reduce((total, cell) => total + cell.pointCount, 0);
+  });
+  const visibleCellCount = $derived.by(() => (
+    activeMode === 'aggregate' ? aggregates.length : 0
+  ));
   const activeColorScale = $derived.by(() => getEffectiveColorScale({
     cells: aggregates,
     aggregateStat: activeAggregateStat,
@@ -760,37 +772,37 @@
     .filter((group) => group.tracks.length));
   const trackSelectionSummary = $derived.by(() => {
     if (!filters.datasetIds.length || filters.trackSelectionMode === 'none') {
-      return t('radiacode-common_none');
+      return t('radtrack-common_none');
     }
 
     if (filters.trackSelectionMode === 'all') {
-      return t('radiacode-common_all-label');
+      return t('radtrack-common_all-label');
     }
 
-    return t('radiacode-map_selected_count-label', { count: filters.trackIds.length });
+    return t('radtrack-map_selected_count-label', { count: filters.trackIds.length });
   });
   const basemapOptions = $derived.by<BasemapOption[]>(() => [
     {
       key: 'default',
-      label: t('radiacode-map_basemap_default-label'),
+      label: t('radtrack-map_basemap_default-label'),
       tileUrlTemplate: $sessionStore.ui?.tileUrlTemplate ?? '',
       attribution: $sessionStore.ui?.attribution ?? ''
     },
     {
       key: 'satellite',
-      label: t('radiacode-map_basemap_satellite-label'),
+      label: t('radtrack-map_basemap_satellite-label'),
       tileUrlTemplate: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
       attribution: 'Tiles © Esri — Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
     },
     {
       key: 'light',
-      label: t('radiacode-map_basemap_light-label'),
+      label: t('radtrack-map_basemap_light-label'),
       tileUrlTemplate: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
       attribution: '© OpenStreetMap contributors © CARTO'
     },
     {
       key: 'topo',
-      label: t('radiacode-map_basemap_topo-label'),
+      label: t('radtrack-map_basemap_topo-label'),
       tileUrlTemplate: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
       attribution: 'Map data: © OpenStreetMap contributors, SRTM | Map style: © OpenTopoMap (CC-BY-SA)'
     }
@@ -890,7 +902,7 @@
         };
       }
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-map_failed_selectors');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-map_failed_selectors');
     } finally {
       lookupsReady = true;
     }
@@ -948,7 +960,7 @@
         return;
       }
 
-      errorMessage = error instanceof Error ? error.message : t('radiacode-map_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-map_failed');
     } finally {
       if (requestId !== requestVersion) {
         return;
@@ -1008,7 +1020,7 @@
       }
       datasetTracksByDatasetId = nextTracksByDatasetId;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-map_failed_selectors');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-map_failed_selectors');
     } finally {
       loadingTrackDatasetIds = loadingTrackDatasetIds.filter((datasetId) => !missingDatasetIds.includes(datasetId));
     }
@@ -1105,7 +1117,7 @@
       body: {
         readingIds: [selectedPoint.id],
         datasetIds: [selectedPoint.datasetId],
-        reason: t('radiacode-map_hidden_reason')
+        reason: t('radtrack-map_hidden_reason')
       },
       csrf: $sessionStore.csrf
     });
@@ -1142,14 +1154,14 @@
 <div class="map-page">
   <div class="page-header">
     <div>
-      <h1>{t('radiacode-map_title')}</h1>
+      <h1>{t('radtrack-map_title')}</h1>
     </div>
     <div class="chip-row">
       {#if hasPendingSidebarChanges()}
-        <span class="chip mid">{t('radiacode-map_pending_changes-label')}</span>
+        <span class="chip mid">{t('radtrack-map_pending_changes-label')}</span>
       {/if}
       {#if loading}
-        <span class="chip warning">{t('radiacode-common_loading-label')}</span>
+        <span class="chip warning">{t('radtrack-common_loading-label')}</span>
       {/if}
     </div>
   </div>
@@ -1158,29 +1170,29 @@
     <aside class="map-sidebar">
       <section class="panel">
         <div class="map-panel-header">
-          <h2>{t('radiacode-common_filters-label')}</h2>
+          <h2>{t('radtrack-common_filters-label')}</h2>
           {#if !autoUpdateMap}
             <button class="primary" disabled={loading || !hasPendingSidebarChanges()} onclick={updateMap}>
-              {t('radiacode-map_update-button')}
+              {t('radtrack-map_update-button')}
             </button>
           {/if}
         </div>
 
         <label class="checkbox-field map-auto-update">
           <input bind:checked={autoUpdateMap} onchange={handleAutoUpdateToggle} type="checkbox" />
-          <span>{t('radiacode-map_auto_update-label')}</span>
+          <span>{t('radtrack-map_auto_update-label')}</span>
         </label>
 
         <div class="form-grid">
           <div class="selector-accordion-stack">
           <details class="selector-accordion" open>
             <summary>
-              <span>{t('radiacode-datasets_title')}</span>
+              <span>{t('radtrack-datasets_title')}</span>
               <span class="settings-accordion-meta">
                 <span class={selectionChipClass({ count: filters.datasetIds.length })}>
                   {filters.datasetIds.length
-                    ? t('radiacode-map_selected_count-label', { count: filters.datasetIds.length })
-                    : t('radiacode-common_none')}
+                    ? t('radtrack-map_selected_count-label', { count: filters.datasetIds.length })
+                    : t('radtrack-common_none')}
                 </span>
                 <span aria-hidden="true" class="settings-accordion-icon"></span>
               </span>
@@ -1189,10 +1201,10 @@
             <div class="selection-stack">
               <div class="actions">
                 <button onclick={handleDatasetSelectAll} disabled={!datasets.length || filters.datasetIds.length === datasets.length}>
-                  {t('radiacode-map_tracks_all-button')}
+                  {t('radtrack-map_tracks_all-button')}
                 </button>
                 <button onclick={handleDatasetClearAll} disabled={!filters.datasetIds.length}>
-                  {t('radiacode-map_tracks_none-button')}
+                  {t('radtrack-map_tracks_none-button')}
                 </button>
               </div>
 
@@ -1209,7 +1221,7 @@
                     <span class="selection-copy">
                       <span class="selection-title" title={dataset.name}>{dataset.name}</span>
                       <span class="selection-meta-row">{formatDatasetOptionSummary(dataset)}</span>
-                      <span class="selection-meta-id">{t('radiacode-map_id_short-label', { id: shortId(dataset.id) })}</span>
+                      <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(dataset.id) })}</span>
                     </span>
                   </label>
                 {/each}
@@ -1219,19 +1231,19 @@
 
           <details class="selector-accordion">
             <summary>
-              <span>{t('radiacode-common_combined_datasets-label')}</span>
+              <span>{t('radtrack-common_combined_datasets-label')}</span>
               <span class="settings-accordion-meta">
                 <span class={selectionChipClass({ count: filters.combinedDatasetIds.length })}>
                   {filters.combinedDatasetIds.length
-                    ? t('radiacode-map_selected_count-label', { count: filters.combinedDatasetIds.length })
-                    : t('radiacode-common_none')}
+                    ? t('radtrack-map_selected_count-label', { count: filters.combinedDatasetIds.length })
+                    : t('radtrack-common_none')}
                 </span>
                 <span aria-hidden="true" class="settings-accordion-icon"></span>
               </span>
             </summary>
 
             <div class="selection-stack">
-              <div class="selection-help muted">{t('radiacode-map_combined_datasets-help')}</div>
+              <div class="selection-help muted">{t('radtrack-map_combined_datasets-help')}</div>
 
               {#if combinedDatasets.length}
                 <div class="actions">
@@ -1239,10 +1251,10 @@
                     onclick={handleCombinedDatasetSelectAll}
                     disabled={filters.combinedDatasetIds.length === combinedDatasets.length}
                   >
-                    {t('radiacode-map_tracks_all-button')}
+                    {t('radtrack-map_tracks_all-button')}
                   </button>
                   <button onclick={handleCombinedDatasetClearAll} disabled={!filters.combinedDatasetIds.length}>
-                    {t('radiacode-map_tracks_none-button')}
+                    {t('radtrack-map_tracks_none-button')}
                   </button>
                 </div>
 
@@ -1259,20 +1271,20 @@
                       <span class="selection-copy">
                         <span class="selection-title" title={combinedDataset.name}>{combinedDataset.name}</span>
                         <span class="selection-meta-row">{formatCombinedDatasetOptionSummary(combinedDataset)}</span>
-                        <span class="selection-meta-id">{t('radiacode-map_id_short-label', { id: shortId(combinedDataset.id) })}</span>
+                        <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(combinedDataset.id) })}</span>
                       </span>
                     </label>
                   {/each}
                 </div>
               {:else}
-                <div class="selection-empty muted">{t('radiacode-map_combined_datasets-empty')}</div>
+                <div class="selection-empty muted">{t('radtrack-map_combined_datasets-empty')}</div>
               {/if}
             </div>
           </details>
 
           <details class="selector-accordion">
             <summary>
-              <span>{t('radiacode-common_tracks-label')}</span>
+              <span>{t('radtrack-common_tracks-label')}</span>
               <span class="settings-accordion-meta">
                 <span class={filters.trackSelectionMode === 'all' ? 'chip start' : selectionChipClass({ count: filters.trackIds.length })}>
                   {trackSelectionSummary}
@@ -1285,10 +1297,10 @@
               {#if filters.datasetIds.length}
                 <div class="actions">
                   <button onclick={handleTrackSelectAll} disabled={filters.trackSelectionMode === 'all' || !selectedTrackGroups.length}>
-                    {t('radiacode-map_tracks_all-button')}
+                    {t('radtrack-map_tracks_all-button')}
                   </button>
                   <button onclick={handleTrackClearAll} disabled={filters.trackSelectionMode === 'none'}>
-                    {t('radiacode-map_tracks_none-button')}
+                    {t('radtrack-map_tracks_none-button')}
                   </button>
                 </div>
 
@@ -1308,11 +1320,11 @@
                               type="checkbox"
                             />
                             <span class="selection-copy">
-                              <span class="selection-title" title={track.trackName ?? `${t('radiacode-layout_track_page-label')} ${shortId(track.id)}`}>
-                                {track.trackName ?? `${t('radiacode-layout_track_page-label')} ${shortId(track.id)}`}
+                              <span class="selection-title" title={track.trackName ?? `${t('radtrack-layout_track_page-label')} ${shortId(track.id)}`}>
+                                {track.trackName ?? `${t('radtrack-layout_track_page-label')} ${shortId(track.id)}`}
                               </span>
                               <span class="selection-meta-row">{formatTrackOptionSummary(track)}</span>
-                              <span class="selection-meta-id">{t('radiacode-map_id_short-label', { id: shortId(track.id) })}</span>
+                              <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(track.id) })}</span>
                             </span>
                           </label>
                         {/each}
@@ -1320,55 +1332,55 @@
                     {/each}
                   </div>
                 {:else if loadingTrackDatasetIds.length}
-                  <div class="selection-empty muted">{t('radiacode-common_loading-label')}</div>
+                  <div class="selection-empty muted">{t('radtrack-common_loading-label')}</div>
                 {:else}
-                  <div class="selection-empty muted">{t('radiacode-map_tracks_empty')}</div>
+                  <div class="selection-empty muted">{t('radtrack-map_tracks_empty')}</div>
                 {/if}
               {:else}
-                <div class="selection-empty muted">{t('radiacode-map_tracks_require_dataset')}</div>
+                <div class="selection-empty muted">{t('radtrack-map_tracks_require_dataset')}</div>
               {/if}
             </div>
           </details>
           </div>
 
           <label>
-            <div class="muted">{t('radiacode-common_metric-label')}</div>
+            <div class="muted">{t('radtrack-common_metric-label')}</div>
             <select bind:value={filters.metric} onchange={handleFilterChange}>
-              <option value="dose_rate">{t('radiacode-common_dose_rate-label')}</option>
-              <option value="count_rate">{t('radiacode-common_count_rate-label')}</option>
-              <option value="accuracy">{t('radiacode-common_accuracy-label')}</option>
+              <option value="dose_rate">{t('radtrack-common_dose_rate-label')}</option>
+              <option value="count_rate">{t('radtrack-common_count_rate-label')}</option>
+              <option value="accuracy">{t('radtrack-common_accuracy-label')}</option>
             </select>
           </label>
 
           <label>
-            <div class="muted">{t('radiacode-common_mode-label')}</div>
+            <div class="muted">{t('radtrack-common_mode-label')}</div>
             <select bind:value={filters.mode} onchange={handleFilterChange}>
-              <option value="aggregate">{t('radiacode-common_aggregates-label')}</option>
-              <option value="raw">{t('radiacode-common_raw_points-label')}</option>
+              <option value="aggregate">{t('radtrack-common_aggregates-label')}</option>
+              <option value="raw">{t('radtrack-common_raw_points-label')}</option>
             </select>
           </label>
 
           {#if filters.mode === 'aggregate'}
             <label>
-              <div class="muted">{t('radiacode-common_shape-label')}</div>
+              <div class="muted">{t('radtrack-common_shape-label')}</div>
               <select bind:value={filters.shape} onchange={handleFilterChange}>
-                <option value="hexagon">{t('radiacode-common_hexagon-label')}</option>
-                <option value="square">{t('radiacode-common_square-label')}</option>
-                <option value="circle">{t('radiacode-common_circle-label')}</option>
+                <option value="hexagon">{t('radtrack-common_hexagon-label')}</option>
+                <option value="square">{t('radtrack-common_square-label')}</option>
+                <option value="circle">{t('radtrack-common_circle-label')}</option>
               </select>
             </label>
           {/if}
 
           {#if filters.mode === 'aggregate'}
             <label>
-              <div class="muted">{t('radiacode-map_aggregate_stat-label')}</div>
+              <div class="muted">{t('radtrack-map_aggregate_stat-label')}</div>
               <select bind:value={filters.aggregateStat} onchange={handleFilterChange}>
-                <option value="min">{t('radiacode-common_min-label')}</option>
-                <option value="max">{t('radiacode-common_max-label')}</option>
-                <option value="mean">{t('radiacode-common_mean-label')}</option>
-                <option value="median">{t('radiacode-common_median-label')}</option>
-                <option value="mode">{t('radiacode-common_mode-label')}</option>
-                <option value="count">{t('radiacode-common_count-label')}</option>
+                <option value="min">{t('radtrack-common_min-label')}</option>
+                <option value="max">{t('radtrack-common_max-label')}</option>
+                <option value="mean">{t('radtrack-common_mean-label')}</option>
+                <option value="median">{t('radtrack-common_median-label')}</option>
+                <option value="mode">{t('radtrack-common_mode-label')}</option>
+                <option value="count">{t('radtrack-common_count-label')}</option>
               </select>
             </label>
           {/if}
@@ -1377,12 +1389,12 @@
             <div class="form-grid field-group">
               <label class="checkbox-field">
                 <input bind:checked={filters.autoCellSize} onchange={handleAutoCellSizeToggle} type="checkbox" />
-                <span>{t('radiacode-map_auto_cell_size-label')}</span>
+                <span>{t('radtrack-map_auto_cell_size-label')}</span>
               </label>
 
               {#if !filters.autoCellSize}
                 <label>
-                  <div class="muted">{t('radiacode-map_cell_size_manual-label')}</div>
+                  <div class="muted">{t('radtrack-map_cell_size_manual-label')}</div>
                   <input
                     bind:value={filters.cellSizeMeters}
                     min="10"
@@ -1393,7 +1405,7 @@
               {/if}
 
               <span class="chip start">
-                {t('radiacode-map_active_cell_size-label', {
+                {t('radtrack-map_active_cell_size-label', {
                   size: formatNumber(activeAppliedCellSizeMeters),
                   zoom: viewport.zoom
                 })}
@@ -1403,34 +1415,34 @@
 
           <label class="checkbox-field">
             <input bind:checked={filters.applyExcludeAreas} onchange={handleFilterChange} type="checkbox" />
-            <span>{t('radiacode-map_apply_exclude_areas-label')}</span>
+            <span>{t('radtrack-map_apply_exclude_areas-label')}</span>
           </label>
         </div>
       </section>
 
       <section class="panel">
-        <h2>{t('radiacode-map_display_options-title')}</h2>
+        <h2>{t('radtrack-map_display_options-title')}</h2>
 
         {#if activeMode === 'aggregate'}
           <div class="form-grid">
             <label class="checkbox-field">
               <input bind:checked={colorScaleSettings.auto} onchange={handleAutoColorScaleToggle} type="checkbox" />
-              <span>{t('radiacode-map_auto_scale-label')}</span>
+              <span>{t('radtrack-map_auto_scale-label')}</span>
             </label>
 
             <div class="grid cols-3 scale-grid">
               <label>
-                <div class="muted">{t('radiacode-map_scale_low-label')}</div>
+                <div class="muted">{t('radtrack-map_scale_low-label')}</div>
                 <input bind:value={colorScaleSettings.low} disabled={colorScaleSettings.auto} step="any" type="number" />
               </label>
 
               <label>
-                <div class="muted">{t('radiacode-map_scale_mid-label')}</div>
+                <div class="muted">{t('radtrack-map_scale_mid-label')}</div>
                 <input bind:value={colorScaleSettings.mid} disabled={colorScaleSettings.auto} step="any" type="number" />
               </label>
 
               <label>
-                <div class="muted">{t('radiacode-map_scale_high-label')}</div>
+                <div class="muted">{t('radtrack-map_scale_high-label')}</div>
                 <input bind:value={colorScaleSettings.high} disabled={colorScaleSettings.auto} step="any" type="number" />
               </label>
             </div>
@@ -1439,7 +1451,7 @@
 
         <details class="settings-accordion">
           <summary>
-            <span>{t('radiacode-map_popup_fields-title')}</span>
+            <span>{t('radtrack-map_popup_fields-title')}</span>
             <span class="settings-accordion-meta">
               <span class="chip subtle">{enabledPopupFieldCount}/6</span>
               <span aria-hidden="true" class="settings-accordion-icon"></span>
@@ -1449,63 +1461,67 @@
           <div class="popup-field-grid">
             <label class="checkbox-field">
               <input bind:checked={popupFields.time} type="checkbox" />
-              <span>{t('radiacode-common_time-label')}</span>
+              <span>{t('radtrack-common_time-label')}</span>
             </label>
 
             <label class="checkbox-field">
               <input bind:checked={popupFields.count} type="checkbox" />
-              <span>{t('radiacode-common_count-label')}</span>
+              <span>{t('radtrack-common_count-label')}</span>
             </label>
 
             <label class="checkbox-field">
               <input bind:checked={popupFields.doseRate} type="checkbox" />
-              <span>{t('radiacode-common_dose_rate-label')}</span>
+              <span>{t('radtrack-common_dose_rate-label')}</span>
             </label>
 
             <label class="checkbox-field">
               <input bind:checked={popupFields.countRate} type="checkbox" />
-              <span>{t('radiacode-common_count_rate-label')}</span>
+              <span>{t('radtrack-common_count_rate-label')}</span>
             </label>
 
             <label class="checkbox-field">
               <input bind:checked={popupFields.accuracy} type="checkbox" />
-              <span>{t('radiacode-common_accuracy-label')}</span>
+              <span>{t('radtrack-common_accuracy-label')}</span>
             </label>
 
             <label class="checkbox-field">
               <input bind:checked={popupFields.temperatureC} type="checkbox" />
-              <span>{t('radiacode-common_temperature-label')}</span>
+              <span>{t('radtrack-common_temperature-label')}</span>
             </label>
           </div>
         </details>
       </section>
 
       <section class="panel">
-        <h2>{t('radiacode-common_viewport-label')}</h2>
+        <h2>{t('radtrack-common_viewport-label')}</h2>
         <div class="grid">
-          <span class="chip start">{t('radiacode-common_lat_range-label', { min: viewport.minLat.toFixed(4), max: viewport.maxLat.toFixed(4) })}</span>
-          <span class="chip start">{t('radiacode-common_lon_range-label', { min: viewport.minLon.toFixed(4), max: viewport.maxLon.toFixed(4) })}</span>
-          <span class="chip mid">{t('radiacode-common_zoom-label', { zoom: viewport.zoom })}</span>
+          <span class="chip start">{t('radtrack-common_lat_range-label', { min: viewport.minLat.toFixed(4), max: viewport.maxLat.toFixed(4) })}</span>
+          <span class="chip start">{t('radtrack-common_lon_range-label', { min: viewport.minLon.toFixed(4), max: viewport.maxLon.toFixed(4) })}</span>
+          <span class="chip mid">{t('radtrack-common_zoom-label', { zoom: viewport.zoom })}</span>
+          <span class="chip mid">{t('radtrack-common_raw_points-label')} {formatCount(visibleRawPointCount)}</span>
+          {#if activeMode === 'aggregate'}
+            <span class="chip subtle">{t('radtrack-common_cells-label')} {formatCount(visibleCellCount)}</span>
+          {/if}
         </div>
       </section>
 
       {#if selectedPoint}
         <section class="panel">
-          <h2>{t('radiacode-common_selected_reading-label')}</h2>
+          <h2>{t('radtrack-common_selected_reading-label')}</h2>
           <div class="grid">
             <span class="chip start">{formatTime(selectedPoint.occurredAt)}</span>
             <span class="chip start">{formatTime(selectedPoint.receivedAt)}</span>
-            <span class="chip mid">{t('radiacode-common_dose_rate-label')} {formatNumber(selectedPoint.doseRate)}</span>
-            <span class="chip mid">{t('radiacode-common_count_rate-label')} {formatNumber(selectedPoint.countRate)}</span>
-            <span class="chip warning">{t('radiacode-common_accuracy-label')} {formatNumber(selectedPoint.accuracy)}</span>
+            <span class="chip mid">{t('radtrack-common_dose_rate-label')} {formatNumber(selectedPoint.doseRate)}</span>
+            <span class="chip mid">{t('radtrack-common_count_rate-label')} {formatNumber(selectedPoint.countRate)}</span>
+            <span class="chip warning">{t('radtrack-common_accuracy-label')} {formatNumber(selectedPoint.accuracy)}</span>
             {#if selectedPoint.temperatureC !== null && selectedPoint.temperatureC !== undefined}
-              <span class="chip warning">{t('radiacode-common_temperature-label')} {formatNumber(selectedPoint.temperatureC)}</span>
+              <span class="chip warning">{t('radtrack-common_temperature-label')} {formatNumber(selectedPoint.temperatureC)}</span>
             {/if}
             {#if selectedPoint.comment}
               <p class="muted">{selectedPoint.comment}</p>
             {/if}
             {#if $sessionStore.user?.role !== 'view_only'}
-              <button class="danger" onclick={hideSelectedPoint}>{t('radiacode-common_hide_point-button')}</button>
+              <button class="danger" onclick={hideSelectedPoint}>{t('radtrack-common_hide_point-button')}</button>
             {/if}
           </div>
         </section>
@@ -1540,7 +1556,7 @@
         <div class="map-overlay map-overlay-basemap">
           <section class="panel map-overlay-card map-overlay-basemap-card">
             <label class="form-grid">
-              <div class="muted">{t('radiacode-map_basemap-label')}</div>
+              <div class="muted">{t('radtrack-map_basemap-label')}</div>
               <select bind:value={basemapKey} onchange={handleBasemapChange}>
                 {#each basemapOptions as basemap}
                   <option value={basemap.key}>{basemap.label}</option>
@@ -1554,29 +1570,29 @@
           <div class="map-overlay map-overlay-legend">
             <details class="panel map-overlay-card" open>
               <summary>
-                <span>{t('radiacode-map_legend-title')}</span>
-                <span class="chip subtle">{t('radiacode-map_aggregate_stat-label')}</span>
+                <span>{t('radtrack-map_legend-title')}</span>
+                <span class="chip subtle">{t('radtrack-map_aggregate_stat-label')}</span>
               </summary>
 
               <div class="legend-bar"></div>
 
               <div class="legend-scale-row">
                 <span class="chip start">
-                  {t('radiacode-common_low-label')}
+                  {t('radtrack-common_low-label')}
                   {#if activeColorScale}
                     {' '}
                     {formatNumber(activeColorScale.low)}
                   {/if}
                 </span>
                 <span class="chip warning">
-                  {t('radiacode-common_mid-label')}
+                  {t('radtrack-common_mid-label')}
                   {#if activeColorScale}
                     {' '}
                     {formatNumber(activeColorScale.mid)}
                   {/if}
                 </span>
                 <span class="chip danger">
-                  {t('radiacode-common_high-label')}
+                  {t('radtrack-common_high-label')}
                   {#if activeColorScale}
                     {' '}
                     {formatNumber(activeColorScale.high)}

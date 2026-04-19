@@ -243,7 +243,7 @@ export const createAuditService = ({ db }) => {
         totalEntries: chainedEntries.length,
         returnedEntries: selectedEntries.length
       },
-      title: 'Radiacode',
+      title: 'RadTrack',
       type: 'audit log',
       integrity: {
         verified: true,

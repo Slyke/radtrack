@@ -59,8 +59,8 @@
 
   const getShapeLabel = ({ shapeType }: { shapeType: 'polygon' | 'circle' }) => (
     shapeType === 'circle'
-      ? t('radiacode-common_circle-label')
-      : t('radiacode-common_polygon-label')
+      ? t('radtrack-common_circle-label')
+      : t('radtrack-common_polygon-label')
   );
 
   const escapeHtml = (value: string) => value
@@ -110,16 +110,16 @@
   };
 
   const buildAreaPopup = ({ area }: { area: ExcludeArea }) => {
-    const title = area.label || t('radiacode-common_unnamed-label');
+    const title = area.label || t('radtrack-common_unnamed-label');
     const exportDefault = area.applyByDefaultOnExport
-      ? t('radiacode-common_yes-label')
-      : t('radiacode-common_no-label');
+      ? t('radtrack-common_yes-label')
+      : t('radtrack-common_no-label');
 
     return `
       <div class="exclude-area-popup">
         <strong>${escapeHtml(title)}</strong>
         <div>${escapeHtml(getShapeLabel({ shapeType: area.shapeType }))}</div>
-        <div>${escapeHtml(t('radiacode-common_export_default-label'))}: ${escapeHtml(exportDefault)}</div>
+        <div>${escapeHtml(t('radtrack-common_export_default-label'))}: ${escapeHtml(exportDefault)}</div>
       </div>
     `;
   };

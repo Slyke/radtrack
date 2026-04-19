@@ -165,12 +165,12 @@
     return formatDateTime({
       value,
       language: $localeStore.language
-    }) ?? t('radiacode-common_none');
+    }) ?? t('radtrack-common_none');
   };
 
   const formatNumber = (value: number | null | undefined) => {
     if (value === null || value === undefined) {
-      return t('radiacode-common_na-label');
+      return t('radtrack-common_na-label');
     }
 
     return numberFormatter().format(value);
@@ -297,11 +297,11 @@
     }
 
     return [
-      { label: t('radiacode-common_mean-label'), value: formatNumber(stats.mean) },
-      { label: t('radiacode-common_min-label'), value: formatNumber(stats.min) },
-      { label: t('radiacode-common_max-label'), value: formatNumber(stats.max) },
-      { label: t('radiacode-common_median-label'), value: formatNumber(stats.median) },
-      { label: t('radiacode-common_mode-label'), value: formatNumber(stats.mode) }
+      { label: t('radtrack-common_mean-label'), value: formatNumber(stats.mean) },
+      { label: t('radtrack-common_min-label'), value: formatNumber(stats.min) },
+      { label: t('radtrack-common_max-label'), value: formatNumber(stats.max) },
+      { label: t('radtrack-common_median-label'), value: formatNumber(stats.median) },
+      { label: t('radtrack-common_mode-label'), value: formatNumber(stats.mode) }
     ];
   };
 
@@ -395,35 +395,35 @@
 
     if (popupFields.time) {
       rows.push(buildPopupDataRowHtml({
-        label: t('radiacode-common_time-label'),
+        label: t('radtrack-common_time-label'),
         value: formatTimestamp(point.occurredAt ?? point.receivedAt)
       }));
     }
 
     if (popupFields.doseRate && point.doseRate !== null && point.doseRate !== undefined) {
       rows.push(buildPopupDataRowHtml({
-        label: t('radiacode-common_dose_rate-label'),
+        label: t('radtrack-common_dose_rate-label'),
         value: formatNumber(point.doseRate)
       }));
     }
 
     if (popupFields.countRate && point.countRate !== null && point.countRate !== undefined) {
       rows.push(buildPopupDataRowHtml({
-        label: t('radiacode-common_count_rate-label'),
+        label: t('radtrack-common_count_rate-label'),
         value: formatNumber(point.countRate)
       }));
     }
 
     if (popupFields.accuracy && point.accuracy !== null && point.accuracy !== undefined) {
       rows.push(buildPopupDataRowHtml({
-        label: t('radiacode-common_accuracy-label'),
+        label: t('radtrack-common_accuracy-label'),
         value: formatNumber(point.accuracy)
       }));
     }
 
     if (popupFields.temperatureC && point.temperatureC !== null && point.temperatureC !== undefined) {
       rows.push(buildPopupDataRowHtml({
-        label: t('radiacode-common_temperature-label'),
+        label: t('radtrack-common_temperature-label'),
         value: formatNumber(point.temperatureC)
       }));
     }
@@ -431,12 +431,12 @@
     return `
       <div class="map-popup">
         ${buildPopupHeaderHtml({
-          title: t('radiacode-map_popup_reading-title')
+          title: t('radtrack-map_popup_reading-title')
         })}
         ${rows.length ? `<div class="map-popup-data-list">${rows.join('')}</div>` : ''}
         ${point.comment ? `
           <section class="map-popup-section">
-            <div class="map-popup-section-title">${escapeHtml(t('radiacode-common_comment-label'))}</div>
+            <div class="map-popup-section-title">${escapeHtml(t('radtrack-common_comment-label'))}</div>
             <div class="map-popup-note">${escapeHtml(point.comment)}</div>
           </section>
         ` : ''}
@@ -447,7 +447,7 @@
   const buildAggregatePopupHtml = ({ cell }: { cell: AggregateCell }) => {
     const sections: string[] = [];
     const badge = popupFields.count
-      ? `${formatNumber(cell.pointCount)} ${t('radiacode-map_popup_points-label')}`
+      ? `${formatNumber(cell.pointCount)} ${t('radtrack-map_popup_points-label')}`
       : null;
     const timeRange = popupFields.time
       ? buildAggregateTimeRange({ timeRange: cell.timeRange })
@@ -457,7 +457,7 @@
       const rows = buildAggregateMetricRows({ stats: cell.metrics.doseRate });
       if (rows) {
         sections.push(buildPopupSectionHtml({
-          title: t('radiacode-common_dose_rate-label'),
+          title: t('radtrack-common_dose_rate-label'),
           body: buildPopupMetricTableHtml({ rows })
         }));
       }
@@ -467,7 +467,7 @@
       const rows = buildAggregateMetricRows({ stats: cell.metrics.countRate });
       if (rows) {
         sections.push(buildPopupSectionHtml({
-          title: t('radiacode-common_count_rate-label'),
+          title: t('radtrack-common_count_rate-label'),
           body: buildPopupMetricTableHtml({ rows })
         }));
       }
@@ -477,7 +477,7 @@
       const rows = buildAggregateMetricRows({ stats: cell.metrics.accuracy });
       if (rows) {
         sections.push(buildPopupSectionHtml({
-          title: t('radiacode-common_accuracy-label'),
+          title: t('radtrack-common_accuracy-label'),
           body: buildPopupMetricTableHtml({ rows })
         }));
       }
@@ -487,7 +487,7 @@
       const rows = buildAggregateMetricRows({ stats: cell.metrics.temperatureC });
       if (rows) {
         sections.push(buildPopupSectionHtml({
-          title: t('radiacode-common_temperature-label'),
+          title: t('radtrack-common_temperature-label'),
           body: buildPopupMetricTableHtml({ rows })
         }));
       }
@@ -496,7 +496,7 @@
     return `
       <div class="map-popup">
         ${buildPopupHeaderHtml({
-          title: t('radiacode-map_popup_aggregate-title'),
+          title: t('radtrack-map_popup_aggregate-title'),
           subtitle: timeRange,
           badge
         })}

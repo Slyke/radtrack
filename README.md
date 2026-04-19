@@ -1,6 +1,6 @@
-# radiacode
+# RadTrack
 
-Radiacode track import and mapping app built as two deployables:
+RadTrack track import and mapping app built as two deployables:
 
 - `api/`: Node.js control plane for auth, imports, Postgres persistence, Redis-backed aggregate caching, exports, moderation, and optional monolith frontend serving
 - `wui/`: Svelte 5 web UI for login, imports, live track ingest keys, datasets, map exploration, exports, audit history, and administration
@@ -23,8 +23,8 @@ Implementation follows these local references in priority order:
 
 ## Runtime Model
 
-- Bootstrap config path env var: `RADIACODE_CONFIG_PATH`
-- Bootstrap secrets path env var: `RADIACODE_SECRETS_PATH`
+- Bootstrap config path env var: `RADTRACK_CONFIG_PATH`
+- Bootstrap secrets path env var: `RADTRACK_SECRETS_PATH`
 - Postgres is required for primary data storage
 - Redis is used for aggregate cache entries
 - UI and API run separately by default
@@ -69,7 +69,7 @@ All return unauthenticated JSON in this shape:
 {
   "ok": true,
   "message": "ok",
-  "service": "radiacode-api",
+  "service": "radtrack-api",
   "version": "0.0.1",
   "build": "v0.0.1-<commit>"
 }

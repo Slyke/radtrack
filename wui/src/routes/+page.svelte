@@ -21,6 +21,6 @@
 </script>
 
 <section class="panel">
-  <h1>{t('radiacode-app_title')}</h1>
-  <p class="muted">{t('radiacode-root_redirecting-description')}</p>
+  <h1>{t('radtrack-app_title')}</h1>
+  <p class="muted">{t('radtrack-root_redirecting-description')}</p>
 </section>

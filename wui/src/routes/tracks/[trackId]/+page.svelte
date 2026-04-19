@@ -49,11 +49,11 @@
   const formatTime = (value: string | null | undefined) => formatDateTime({
     value,
     language: $localeStore.language
-  }) ?? t('radiacode-common_none');
+  }) ?? t('radtrack-common_none');
 
   const formatNumber = (value: number | null | undefined, digits = 6) => {
     if (value === null || value === undefined) {
-      return t('radiacode-common_na-label');
+      return t('radtrack-common_na-label');
     }
 
     return new Intl.NumberFormat($localeStore.language, {
@@ -61,8 +61,8 @@
     }).format(value);
   };
 
-  const trackSourceLabel = (sourceType: string) => t('radiacode-track_source_type-label', {
-    type: t(`radiacode-track_source_type-${sourceType}`)
+  const trackSourceLabel = (sourceType: string) => t('radtrack-track_source_type-label', {
+    type: t(`radtrack-track_source_type-${sourceType}`)
   });
 
   const endpointUrl = $derived(
@@ -98,7 +98,7 @@
     countRate: 84,
     deviceId: 'rc-001',
     deviceName: 'Pocket Gamma',
-    deviceType: 'Radiacode 102',
+    deviceType: 'RadTrack 102',
     deviceCalibration: 'factory-2026-01',
     temperatureC: 21.3,
     humidityPct: 42,
@@ -125,7 +125,7 @@
     countRate: 84,
     deviceId: 'rc-001',
     deviceName: 'Pocket Gamma',
-    deviceType: 'Radiacode 102',
+    deviceType: 'RadTrack 102',
     deviceCalibration: 'factory-2026-01',
     temperatureC: 21.3,
     humidityPct: 42,
@@ -192,7 +192,7 @@
       readingOffset = offset;
       errorMessage = null;
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed');
     }
   };
 
@@ -215,7 +215,7 @@
       };
       await loadTrack();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_create_key');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_create_key');
     }
   };
 
@@ -233,7 +233,7 @@
       });
       await loadTrack();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_revoke_key');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_revoke_key');
     }
   };
 
@@ -252,7 +252,7 @@
       generatedKey = response.result.replacement.plaintextKey;
       await loadTrack();
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_rotate_key');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_rotate_key');
     }
   };
 
@@ -261,7 +261,7 @@
       return;
     }
 
-    if (!window.confirm(t('radiacode-track_delete_confirm', { name: track.trackName }))) {
+    if (!window.confirm(t('radtrack-track_delete_confirm', { name: track.trackName }))) {
       return;
     }
 
@@ -273,7 +273,7 @@
       });
       await goto(`/datasets/${track.dataset.id}`);
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_delete');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_delete');
     }
   };
 
@@ -294,7 +294,7 @@
       resetReadingForm();
       await loadTrack({ offset: readingOffset });
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed');
     } finally {
       savingReading = false;
     }
@@ -305,7 +305,7 @@
       return;
     }
 
-    if (!window.confirm(t('radiacode-track_restore_original_confirm', { name: track.trackName }))) {
+    if (!window.confirm(t('radtrack-track_restore_original_confirm', { name: track.trackName }))) {
       return;
     }
 
@@ -321,7 +321,7 @@
       resetReadingForm();
       await loadTrack({ offset: 0 });
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_restore_original');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_restore_original');
     } finally {
       restoringOriginal = false;
     }
@@ -345,7 +345,7 @@
       };
       await loadTrack({ offset: readingOffset });
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_share');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_share');
     }
   };
 
@@ -362,7 +362,7 @@
       });
       await loadTrack({ offset: readingOffset });
     } catch (error) {
-      errorMessage = error instanceof Error ? error.message : t('radiacode-track_failed_share');
+      errorMessage = error instanceof Error ? error.message : t('radtrack-track_failed_share');
     }
   };
 
@@ -375,53 +375,53 @@
   </section>
 {:else if !track}
   <section class="panel">
-    <p class="muted">{t('radiacode-common_loading-label')}…</p>
+    <p class="muted">{t('radtrack-common_loading-label')}…</p>
   </section>
 {:else}
   <div class="page-header">
     <div>
       <h1>{track.trackName}</h1>
-      <p class="muted">{t('radiacode-track_description')}</p>
+      <p class="muted">{t('radtrack-track_description')}</p>
     </div>
     <div class="chip-row">
       <span class="chip start">{trackSourceLabel(track.sourceType)}</span>
-      <span class="chip mid">{t('radiacode-track_access_level-label', { level: track.accessLevel })}</span>
+      <span class="chip mid">{t('radtrack-track_access_level-label', { level: track.accessLevel })}</span>
       <a class="button-link" href={`/datasets/${track.dataset.id}`}>{track.dataset.name}</a>
       {#if track.accessLevel === 'edit'}
         {#if track.canRestoreOriginal}
           <button class="warning" disabled={restoringOriginal} onclick={restoreOriginal}>
-            {t('radiacode-track_restore_original-button')}
+            {t('radtrack-track_restore_original-button')}
           </button>
         {/if}
-        <button class="danger" onclick={deleteTrack}>{t('radiacode-common_danger-delete-button')}</button>
+        <button class="danger" onclick={deleteTrack}>{t('radtrack-common_danger-delete-button')}</button>
       {/if}
     </div>
   </div>
 
   {#if generatedKey}
     <section class="panel">
-      <h2>{t('radiacode-track_created_key-title')}</h2>
-      <p class="muted">{t('radiacode-track_plaintext_warning')}</p>
+      <h2>{t('radtrack-track_created_key-title')}</h2>
+      <p class="muted">{t('radtrack-track_plaintext_warning')}</p>
       <textarea readonly value={generatedKey}></textarea>
     </section>
   {/if}
 
   <section class="grid cols-2">
     <article class="panel">
-      <h2>{t('radiacode-track_title')}</h2>
+      <h2>{t('radtrack-track_title')}</h2>
       <div class="form-grid">
         <label>
-          <div class="muted">{t('radiacode-common_source-label')}</div>
+          <div class="muted">{t('radtrack-common_source-label')}</div>
           <input readonly value={trackSourceLabel(track.sourceType)} />
         </label>
         {#if track.ingest}
           <label>
-            <div class="muted">{t('radiacode-track_live_id-title')}</div>
+            <div class="muted">{t('radtrack-track_live_id-title')}</div>
             <input readonly value={track.ingestTrackId} />
           </label>
         {/if}
         <label>
-          <div class="muted">{t('radiacode-common_created-label')}</div>
+          <div class="muted">{t('radtrack-common_created-label')}</div>
           <input readonly value={formatTime(track.createdAt)} />
         </label>
       </div>
@@ -429,17 +429,17 @@
 
     <article class="panel">
       {#if !track.ingest}
-        <h2>{t('radiacode-track_header-title')}</h2>
-        <p class="muted">{t('radiacode-track_not_live')}</p>
+        <h2>{t('radtrack-track_header-title')}</h2>
+        <p class="muted">{t('radtrack-track_not_live')}</p>
       {:else}
-        <h2>{t('radiacode-track_endpoint-title')}</h2>
+        <h2>{t('radtrack-track_endpoint-title')}</h2>
         <div class="form-grid">
           <label>
-            <div class="muted">{t('radiacode-common_endpoint-label')}</div>
+            <div class="muted">{t('radtrack-common_endpoint-label')}</div>
             <input readonly value={endpointUrl} />
           </label>
           <label>
-            <div class="muted">{t('radiacode-common_header_name-label')}</div>
+            <div class="muted">{t('radtrack-common_header_name-label')}</div>
             <input readonly value={track.ingest.headerName} />
           </label>
         </div>
@@ -451,7 +451,7 @@
     <section class="panel">
       <details class="sharing-accordion">
         <summary>
-          <span>{t('radiacode-common_sharing-label')}</span>
+          <span>{t('radtrack-common_sharing-label')}</span>
           <span class="sharing-summary">
             <span class="chip subtle">{track.shares.length}</span>
             <span aria-hidden="true" class="sharing-icon"></span>
@@ -459,11 +459,11 @@
         </summary>
 
         <div class="form-grid">
-          <p class="muted">{t('radiacode-track_sharing_help')}</p>
+          <p class="muted">{t('radtrack-track_sharing_help')}</p>
 
           <div class="sharing-controls">
             <select bind:value={shareForm.targetUserId}>
-              <option value="">{t('radiacode-common_select_user-option')}</option>
+              <option value="">{t('radtrack-common_select_user-option')}</option>
               {#each shareTargets as target}
                 {#if target.id !== $sessionStore.user?.id}
                   <option value={target.id}>{target.username} ({target.role})</option>
@@ -471,11 +471,11 @@
               {/each}
             </select>
             <select bind:value={shareForm.accessLevel}>
-              <option value="view">{t('radiacode-common_view-label')}</option>
-              <option value="edit">{t('radiacode-common_edit-label')}</option>
+              <option value="view">{t('radtrack-common_view-label')}</option>
+              <option value="edit">{t('radtrack-common_edit-label')}</option>
             </select>
             <div class="actions">
-              <button class="primary" onclick={saveShare}>{t('radiacode-common_share-button')}</button>
+              <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
             </div>
           </div>
 
@@ -483,15 +483,15 @@
             <table>
               <thead>
                 <tr>
-                  <th>{t('radiacode-common_user-label')}</th>
-                  <th>{t('radiacode-common_access-label')}</th>
-                  <th>{t('radiacode-common_actions-label')}</th>
+                  <th>{t('radtrack-common_user-label')}</th>
+                  <th>{t('radtrack-common_access-label')}</th>
+                  <th>{t('radtrack-common_actions-label')}</th>
                 </tr>
               </thead>
               <tbody>
                 {#if !track.shares.length}
                   <tr>
-                    <td colspan="3" class="muted">{t('radiacode-track_sharing_empty')}</td>
+                    <td colspan="3" class="muted">{t('radtrack-track_sharing_empty')}</td>
                   </tr>
                 {:else}
                   {#each track.shares as share}
@@ -499,7 +499,7 @@
                       <td>{share.username}</td>
                       <td>{share.accessLevel}</td>
                       <td>
-                        <button class="danger" onclick={() => removeShare(share.id)}>{t('radiacode-common_remove-button')}</button>
+                        <button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button>
                       </td>
                     </tr>
                   {/each}
@@ -515,14 +515,14 @@
   {#if track.ingest}
     <section class="grid cols-2">
       <article class="panel">
-        <h2>{t('radiacode-track_ingest_keys-title')}</h2>
+        <h2>{t('radtrack-track_ingest_keys-title')}</h2>
 
         {#if track.canManageIngest}
           <div class="form-grid">
-            <input bind:value={keyForm.label} placeholder={t('radiacode-track_key_label-placeholder')} />
-            <textarea bind:value={keyForm.notes} placeholder={t('radiacode-track_key_notes-placeholder')}></textarea>
+            <input bind:value={keyForm.label} placeholder={t('radtrack-track_key_label-placeholder')} />
+            <textarea bind:value={keyForm.notes} placeholder={t('radtrack-track_key_notes-placeholder')}></textarea>
             <div class="actions">
-              <button class="primary" onclick={createKey}>{t('radiacode-track_create_key-button')}</button>
+              <button class="primary" onclick={createKey}>{t('radtrack-track_create_key-button')}</button>
             </div>
           </div>
         {/if}
@@ -531,17 +531,17 @@
           <table>
             <thead>
               <tr>
-                <th>{t('radiacode-common_label-label')}</th>
-                <th>{t('radiacode-common_prefix-label')}</th>
-                <th>{t('radiacode-common_state-label')}</th>
-                <th>{t('radiacode-track_last_used-label')}</th>
-                <th>{t('radiacode-common_actions-label')}</th>
+                <th>{t('radtrack-common_label-label')}</th>
+                <th>{t('radtrack-common_prefix-label')}</th>
+                <th>{t('radtrack-common_state-label')}</th>
+                <th>{t('radtrack-track_last_used-label')}</th>
+                <th>{t('radtrack-common_actions-label')}</th>
               </tr>
             </thead>
             <tbody>
               {#if !track.keys.length}
                 <tr>
-                  <td colspan="5" class="muted">{t('radiacode-track_keys_empty')}</td>
+                  <td colspan="5" class="muted">{t('radtrack-track_keys_empty')}</td>
                 </tr>
               {:else}
                 {#each track.keys as key}
@@ -557,17 +557,17 @@
                     <td><code>{key.keyPrefix}</code></td>
                     <td>
                       {#if key.active}
-                        <span class="chip mid">{t('radiacode-common_active-label')}</span>
+                        <span class="chip mid">{t('radtrack-common_active-label')}</span>
                       {:else}
-                        <span class="chip danger">{t('radiacode-common_revoked-label')}</span>
+                        <span class="chip danger">{t('radtrack-common_revoked-label')}</span>
                       {/if}
                     </td>
                     <td>{formatTime(key.lastUsedAt)}</td>
                     <td>
                       {#if track.canManageIngest && key.active}
                         <div class="actions">
-                          <button class="warning" onclick={() => rotateKey(key.id)}>{t('radiacode-track_rotate-button')}</button>
-                          <button class="danger" onclick={() => revokeKey(key.id)}>{t('radiacode-track_revoke-button')}</button>
+                          <button class="warning" onclick={() => rotateKey(key.id)}>{t('radtrack-track_rotate-button')}</button>
+                          <button class="danger" onclick={() => revokeKey(key.id)}>{t('radtrack-track_revoke-button')}</button>
                         </div>
                       {/if}
                     </td>
@@ -580,11 +580,11 @@
       </article>
 
       <article class="panel">
-        <h2>{t('radiacode-track_curl-title')}</h2>
+        <h2>{t('radtrack-track_curl-title')}</h2>
         <textarea readonly value={curlExample}></textarea>
-        <p class="muted">{t('radiacode-track_sample_payload_description')}</p>
+        <p class="muted">{t('radtrack-track_sample_payload_description')}</p>
 
-        <h3>{t('radiacode-track_payload-title')}</h3>
+        <h3>{t('radtrack-track_payload-title')}</h3>
         <textarea readonly value={payloadExample}></textarea>
       </article>
     </section>
@@ -593,9 +593,9 @@
   <section class="panel">
     <div class="page-header">
       <div>
-        <h2>{t('radiacode-track_recent_points-title')}</h2>
+        <h2>{t('radtrack-track_recent_points-title')}</h2>
         <p class="muted">
-          {t('radiacode-track_points_range-label', {
+          {t('radtrack-track_points_range-label', {
             start: track.readingsPage.totalCount ? readingPageStart : 0,
             end: readingPageEnd,
             total: track.readingsPage.totalCount
@@ -604,13 +604,13 @@
       </div>
       <div class="actions">
         <button onclick={() => { void loadTrack({ offset: Math.max(0, readingOffset - readingPageLimit) }); }} disabled={readingOffset <= 0}>
-          {t('radiacode-common_previous-label')}
+          {t('radtrack-common_previous-label')}
         </button>
         <button
           onclick={() => { void loadTrack({ offset: readingOffset + readingPageLimit }); }}
           disabled={(readingOffset + (track.readingsPage.readings?.length ?? 0)) >= track.readingsPage.totalCount}
         >
-          {t('radiacode-common_next-label')}
+          {t('radtrack-common_next-label')}
         </button>
       </div>
     </div>
@@ -618,26 +618,26 @@
       <table>
         <thead>
           <tr>
-            <th>{t('radiacode-common_row-label')}</th>
-            <th>{t('radiacode-common_occurred_at-label')}</th>
-            <th>{t('radiacode-common_received_at-label')}</th>
-            <th>{t('radiacode-common_latitude-label')}</th>
-            <th>{t('radiacode-common_longitude-label')}</th>
-            <th>{t('radiacode-common_altitude-label')}</th>
-            <th>{t('radiacode-common_accuracy-label')}</th>
-            <th>{t('radiacode-common_dose_rate-label')}</th>
-            <th>{t('radiacode-common_count_rate-label')}</th>
-            <th>{t('radiacode-common_comment-label')}</th>
-            <th>{t('radiacode-common_state-label')}</th>
+            <th>{t('radtrack-common_row-label')}</th>
+            <th>{t('radtrack-common_occurred_at-label')}</th>
+            <th>{t('radtrack-common_received_at-label')}</th>
+            <th>{t('radtrack-common_latitude-label')}</th>
+            <th>{t('radtrack-common_longitude-label')}</th>
+            <th>{t('radtrack-common_altitude-label')}</th>
+            <th>{t('radtrack-common_accuracy-label')}</th>
+            <th>{t('radtrack-common_dose_rate-label')}</th>
+            <th>{t('radtrack-common_count_rate-label')}</th>
+            <th>{t('radtrack-common_comment-label')}</th>
+            <th>{t('radtrack-common_state-label')}</th>
             {#if track.accessLevel === 'edit'}
-              <th>{t('radiacode-common_actions-label')}</th>
+              <th>{t('radtrack-common_actions-label')}</th>
             {/if}
           </tr>
         </thead>
         <tbody>
           {#if !track.readingsPage.readings.length}
             <tr>
-              <td colspan={track.accessLevel === 'edit' ? 12 : 11} class="muted">{t('radiacode-track_no_recent_points')}</td>
+              <td colspan={track.accessLevel === 'edit' ? 12 : 11} class="muted">{t('radtrack-track_no_recent_points')}</td>
             </tr>
           {:else}
             {#each track.readingsPage.readings as reading}
@@ -655,18 +655,18 @@
                   <td><input bind:value={readingForm.comment} /></td>
                   <td>
                     {#if reading.isModified}
-                      <span class="chip warning">{t('radiacode-track_modified-label')}</span>
+                      <span class="chip warning">{t('radtrack-track_modified-label')}</span>
                     {:else}
-                      <span class="chip subtle">{t('radiacode-common_original-label')}</span>
+                      <span class="chip subtle">{t('radtrack-common_original-label')}</span>
                     {/if}
                   </td>
                   {#if track.accessLevel === 'edit'}
                     <td>
                       <div class="actions">
                         <button class="primary" disabled={savingReading} onclick={() => saveReading(reading.id)}>
-                          {t('radiacode-common_save-button')}
+                          {t('radtrack-common_save-button')}
                         </button>
-                        <button onclick={resetReadingForm}>{t('radiacode-common_cancel-button')}</button>
+                        <button onclick={resetReadingForm}>{t('radtrack-common_cancel-button')}</button>
                       </div>
                     </td>
                   {/if}
@@ -679,17 +679,17 @@
                   <td>{formatNumber(reading.accuracy, 2)}</td>
                   <td>{formatNumber(reading.usv, 4)}</td>
                   <td>{formatNumber(reading.countRate, 2)}</td>
-                  <td>{reading.comment ?? t('radiacode-common_none')}</td>
+                  <td>{reading.comment ?? t('radtrack-common_none')}</td>
                   <td>
                     {#if reading.isModified}
-                      <span class="chip warning">{t('radiacode-track_modified-label')}</span>
+                      <span class="chip warning">{t('radtrack-track_modified-label')}</span>
                     {:else}
-                      <span class="chip subtle">{t('radiacode-common_original-label')}</span>
+                      <span class="chip subtle">{t('radtrack-common_original-label')}</span>
                     {/if}
                   </td>
                   {#if track.accessLevel === 'edit'}
                     <td>
-                      <button onclick={() => startEditingReading(reading)}>{t('radiacode-common_edit-label')}</button>
+                      <button onclick={() => startEditingReading(reading)}>{t('radtrack-common_edit-label')}</button>
                     </td>
                   {/if}
                 {/if}

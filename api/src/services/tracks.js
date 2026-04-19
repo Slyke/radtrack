@@ -4,7 +4,7 @@ import { createOpaqueId, sha256Hex } from '../utils/ids.js';
 import { parseTrackBuffer } from '../utils/track.js';
 import { canShare } from './permissions.js';
 
-const ingestKeyHeaderName = 'x-radiacode-api-key';
+const ingestKeyHeaderName = 'x-radtrack-api-key';
 
 const createIngestTrackId = () => randomBytes(8).toString('hex');
 

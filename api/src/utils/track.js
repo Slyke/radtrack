@@ -226,6 +226,33 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
   };
 };
 
+export const computeParsedTrackSemanticChecksum = ({ parsed }) => {
+  const normalizedRows = parsed.rows
+    .map((row) => JSON.stringify({
+      occurredAt: row.occurredAt ?? null,
+      rawTimestamp: row.occurredAt ? null : (row.rawTimestamp ?? null),
+      parsedTimeText: row.occurredAt ? null : (row.parsedTimeText ?? null),
+      latitude: row.latitude ?? null,
+      longitude: row.longitude ?? null,
+      accuracy: row.accuracy ?? null,
+      doseRate: row.doseRate ?? null,
+      countRate: row.countRate ?? null,
+      comment: row.comment ?? '',
+      extraJson: row.extraJson ?? {}
+    }))
+    .sort();
+
+  return sha256Hex({
+    value: JSON.stringify({
+      deviceIdentifierRaw: parsed.device.deviceIdentifierRaw ?? null,
+      deviceModel: parsed.device.deviceModel ?? null,
+      deviceSerial: parsed.device.deviceSerial ?? null,
+      rowCount: parsed.rows.length,
+      rows: normalizedRows
+    })
+  });
+};
+
 const openZipBuffer = ({ buffer }) => new Promise((resolve, reject) => {
   yauzl.fromBuffer(buffer, { lazyEntries: true, decodeStrings: true }, (error, zipFile) => {
     if (error) {
@@ -255,6 +282,26 @@ const isSupportedTrackName = ({ fileName }) => {
   const normalized = fileName.toLowerCase();
   return normalized.endsWith('.rctrk');
 };
+
+const parseJsonBuffer = ({ buffer }) => {
+  const text = buffer.toString('utf8').replace(/^\uFEFF/, '').trim();
+  if (!text || (!text.startsWith('{') && !text.startsWith('['))) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
+
+const isRadTrackExportEnvelope = ({ value }) => (
+  Boolean(value)
+  && typeof value === 'object'
+  && !Array.isArray(value)
+  && value.type === 'radtrack-export'
+);
 
 export const extractSupportedArchiveEntries = async ({ buffer, correlationId = null }) => {
   const zipFile = await openZipBuffer({ buffer });
@@ -308,15 +355,41 @@ export const extractSupportedArchiveEntries = async ({ buffer, correlationId = n
 
 export const detectImportKind = ({ fileName, buffer }) => {
   const lowerName = String(fileName ?? '').toLowerCase();
+  const parsedJson = (
+    lowerName.endsWith('.json')
+    || buffer[0] === 0x7b
+    || buffer[0] === 0x5b
+  )
+    ? parseJsonBuffer({ buffer })
+    : null;
   const zipSignature = buffer.length >= 4
     && buffer[0] === 0x50
     && buffer[1] === 0x4b
     && (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07)
     && (buffer[3] === 0x04 || buffer[3] === 0x06 || buffer[3] === 0x08);
 
+  if (isRadTrackExportEnvelope({ value: parsedJson })) {
+    return 'backup_json';
+  }
+
   if (zipSignature || lowerName.endsWith('.zip') || lowerName.endsWith('.zrctrk')) {
     return 'archive';
   }
 
   return 'track_file';
+};
+
+export const parseExportEnvelopeBuffer = ({ buffer, fileName, correlationId = null }) => {
+  const parsed = parseJsonBuffer({ buffer });
+  if (!isRadTrackExportEnvelope({ value: parsed })) {
+    throw createAppError({
+      caller: 'track::parseExportEnvelopeBuffer',
+      reason: 'JSON payload is not a supported RadTrack export backup.',
+      errorKey: 'IMPORT_PARSE_FAILED',
+      correlationId,
+      context: { fileName }
+    });
+  }
+
+  return parsed;
 };

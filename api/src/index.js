@@ -174,14 +174,14 @@ const main = async () => {
   const importService = createImportService({ db, audit, logger });
   const trackService = createTrackService({ db, audit, datasetService });
   const queryService = createQueryService({ db, cache, settingsService, datasetService });
-  const exportService = createExportService({ queryService, settingsService });
+  const exportService = createExportService({ db, queryService, settingsService });
 
   await settingsService.seedRuntimeSettings({ correlationId: startupCorrelationId });
   await authService.bootstrapAdmin({ correlationId: startupCorrelationId });
 
   logger.info({
     caller: 'startup::main',
-    message: 'Radiacode API starting.',
+    message: 'RadTrack API starting.',
     correlationId: startupCorrelationId,
     context: {
       build: buildInfo.label,
@@ -200,7 +200,7 @@ const main = async () => {
     scopeUserId: null,
     eventType: 'app.started',
     entityType: 'service',
-    entityId: 'radiacode-api',
+    entityId: 'radtrack-api',
     payload: {
       build: buildInfo.label,
       version: buildInfo.version,
@@ -243,7 +243,7 @@ const main = async () => {
     sendJson({
       res,
       body: toHealthBody({
-        service: 'radiacode-api',
+        service: 'radtrack-api',
         buildInfo,
         extra: {
           services: {
@@ -259,7 +259,7 @@ const main = async () => {
     sendJson({
       res,
       body: toHealthBody({
-        service: 'radiacode-api',
+        service: 'radtrack-api',
         buildInfo
       })
     });
@@ -481,7 +481,7 @@ const main = async () => {
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="radiacode-audit-${auditLog.filters.limit}.json"`
+        `attachment; filename="radtrack-audit-${auditLog.filters.limit}.json"`
       );
       res.setHeader('Content-Length', String(Buffer.byteLength(payload, 'utf8')));
       res.status(200).send(payload);
@@ -513,16 +513,19 @@ const main = async () => {
       user: auth.user,
       correlationId: req.correlationId
     });
+    const importedDatasetIds = Array.isArray(result.datasetIds)
+      ? result.datasetIds
+      : result.datasetId ? [result.datasetId] : [];
     await invalidateDatasetsSafely({
       logger,
       queryService,
-      datasetIds: [result.datasetId],
+      datasetIds: importedDatasetIds,
       correlationId: req.correlationId,
       caller: 'api::imports::invalidateDatasets',
       reason: 'Failed invalidating dataset cache after import.',
       context: {
         batchId: result.batchId,
-        datasetId: result.datasetId
+        datasetIds: importedDatasetIds
       }
     });
     sendJson({ res, status: 201, body: { ok: true, ...result } });
@@ -1406,7 +1409,7 @@ const main = async () => {
   const server = app.listen(runtimeConfig.port, () => {
     logger.info({
       caller: 'startup::listen',
-      message: `Radiacode API listening on ${runtimeConfig.port}`,
+      message: `RadTrack API listening on ${runtimeConfig.port}`,
       correlationId: startupCorrelationId,
       context: {
         build: buildInfo.label
@@ -1434,7 +1437,7 @@ main().catch((error) => {
     : logError({
         logger,
         caller: 'startup::fatal',
-        reason: 'Radiacode API failed during startup.',
+        reason: 'RadTrack API failed during startup.',
         errorKey: 'SYSTEM_STARTUP_FAILED',
         correlationId: null,
         cause: error

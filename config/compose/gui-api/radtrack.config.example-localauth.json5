@@ -8,8 +8,8 @@
     postgres: {
       host: "postgres",
       port: 5432,
-      database: "radiacode",
-      user: "radiacode"
+      database: "radtrack",
+      user: "radtrack"
     }
   },
   redis: {

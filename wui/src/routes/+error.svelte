@@ -16,8 +16,8 @@
 </script>
 
 <section class="panel">
-  <h1>{t('radiacode-common_error-request_failed')}</h1>
-  <p class="muted">{error?.message ?? t('radiacode-common_error-unexpected_frontend')}</p>
+  <h1>{t('radtrack-common_error-request_failed')}</h1>
+  <p class="muted">{error?.message ?? t('radtrack-common_error-unexpected_frontend')}</p>
   <div class="chip-row">
     {#if error?.errorKey}
       <span class="chip warning">{error.errorKey}</span>
