@@ -35,6 +35,11 @@
 
   const defaultTileUrlTemplate = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
   const defaultAttribution = '&copy; OpenStreetMap contributors';
+  const mercatorMaxLatitude = 85.05112878;
+  const singleWorldBounds = [
+    [-mercatorMaxLatitude, -180],
+    [mercatorMaxLatitude, 180]
+  ] as [[number, number], [number, number]];
 
   let {
     areas = [],
@@ -104,7 +109,8 @@
     }
 
     tileLayer = leaflet.tileLayer(nextUrlTemplate, {
-      attribution: nextAttribution
+      attribution: nextAttribution,
+      noWrap: true
     }).addTo(map);
     activeTileLayerSignature = signature;
   };
@@ -287,7 +293,9 @@
   onMount(async () => {
     leaflet = await import('leaflet');
     map = leaflet.map(container, {
-      zoomControl: true
+      zoomControl: true,
+      maxBounds: singleWorldBounds,
+      maxBoundsViscosity: 1
     }).setView([41.9, -87.7], 9);
 
     ensureTileLayer({

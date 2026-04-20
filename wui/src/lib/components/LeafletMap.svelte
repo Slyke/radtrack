@@ -114,6 +114,8 @@
 
   const earthRadiusMeters = 6378137;
   const mercatorMaxLatitude = 85.05112878;
+  const worldWidthDegrees = 360;
+  const resetToPrimaryWorldMaxZoom = 2;
   const numberFormatter = () => new Intl.NumberFormat($localeStore.language, {
     maximumFractionDigits: 4
   });
@@ -143,6 +145,19 @@
   }) => ({
     latitude: toDegrees((2 * Math.atan(Math.exp(y / earthRadiusMeters))) - (Math.PI / 2)),
     longitude: toDegrees(x / earthRadiusMeters)
+  });
+  const wrapLongitude = (longitude: number) => (
+    ((((longitude + 180) % worldWidthDegrees) + worldWidthDegrees) % worldWidthDegrees) - 180
+  );
+  const withLongitudeOffset = ({
+    latitude,
+    longitude
+  }: {
+    latitude: number;
+    longitude: number;
+  }, longitudeOffset: number) => ({
+    latitude,
+    longitude: longitude + longitudeOffset
   });
 
   let container: HTMLDivElement;
@@ -520,6 +535,57 @@
     });
   };
 
+  const getVisibleLongitudeOffsets = () => {
+    if (!map || map.getZoom() <= resetToPrimaryWorldMaxZoom) {
+      return [0];
+    }
+
+    const bounds = map.getBounds();
+    const firstWorldCopy = Math.ceil((bounds.getWest() - 180) / worldWidthDegrees);
+    const lastWorldCopy = Math.floor((bounds.getEast() + 180) / worldWidthDegrees);
+    const offsets: number[] = [];
+
+    for (let worldCopy = firstWorldCopy; worldCopy <= lastWorldCopy; worldCopy += 1) {
+      offsets.push(worldCopy * worldWidthDegrees);
+    }
+
+    return offsets.length ? offsets : [0];
+  };
+
+  const rerenderCurrentView = () => render({
+    currentPoints: points,
+    currentAggregates: aggregates,
+    currentMode: mode,
+    currentShape: shape,
+    currentColorScale: colorScale
+  });
+
+  const maybeResetToPrimaryWorld = () => {
+    if (!map || map.getZoom() > resetToPrimaryWorldMaxZoom) {
+      return false;
+    }
+
+    const center = map.getCenter();
+    const normalizedLongitude = wrapLongitude(center.lng);
+    if (Math.abs(center.lng - normalizedLongitude) < 1e-7) {
+      return false;
+    }
+
+    map.setView([center.lat, normalizedLongitude], map.getZoom(), {
+      animate: false
+    });
+    return true;
+  };
+
+  const handleMoveEnd = () => {
+    if (maybeResetToPrimaryWorld()) {
+      return;
+    }
+
+    emitViewport();
+    rerenderCurrentView();
+  };
+
   const render = ({
     currentPoints,
     currentAggregates,
@@ -546,24 +612,31 @@
     };
 
     if (currentMode === 'raw') {
+      const longitudeOffsets = getVisibleLongitudeOffsets();
       for (const point of currentPoints) {
-        const marker = leaflet.circleMarker([point.latitude, point.longitude], {
-          pane: overlayPane,
-          radius: 5,
-          color: '#00b6ff',
-          weight: 1,
-          fillColor: '#00b6ff',
-          fillOpacity: 0.55
-        });
-        marker.bindPopup(buildRawPopupHtml({ point }), popupOptions);
-        marker.on('click', () => {
-          dispatch('selectpoint', point);
-        });
-        overlayLayer.addLayer(marker);
+        for (const longitudeOffset of longitudeOffsets) {
+          const marker = leaflet.circleMarker([
+            point.latitude,
+            point.longitude + longitudeOffset
+          ], {
+            pane: overlayPane,
+            radius: 5,
+            color: '#00b6ff',
+            weight: 1,
+            fillColor: '#00b6ff',
+            fillOpacity: 0.55
+          });
+          marker.bindPopup(buildRawPopupHtml({ point }), popupOptions);
+          marker.on('click', () => {
+            dispatch('selectpoint', point);
+          });
+          overlayLayer.addLayer(marker);
+        }
       }
       return;
     }
 
+    const longitudeOffsets = getVisibleLongitudeOffsets();
     for (const cell of currentAggregates) {
       const metricValue = cell.stats?.[aggregateStat as keyof AggregateStats];
       const fill = typeof metricValue === 'number'
@@ -571,54 +644,58 @@
         : '#3a4658';
       const popupHtml = buildAggregatePopupHtml({ cell });
 
-      if (currentShape === 'circle') {
-        const layer = leaflet.circle([cell.center.latitude, cell.center.longitude], {
+      for (const longitudeOffset of longitudeOffsets) {
+        const center = withLongitudeOffset(cell.center, longitudeOffset);
+
+        if (currentShape === 'circle') {
+          const layer = leaflet.circle([center.latitude, center.longitude], {
+            pane: overlayPane,
+            radius: cell.radiusMeters,
+            color: fill,
+            fillColor: fill,
+            fillOpacity: 0.42,
+            opacity: 0.9,
+            weight: 1.5
+          });
+          layer.bindPopup(popupHtml, popupOptions);
+          overlayLayer.addLayer(layer);
+          continue;
+        }
+
+        if (currentShape === 'square') {
+          const layer = leaflet.rectangle(
+            buildSquareBounds({
+              center,
+              radiusMeters: cell.radiusMeters
+            }),
+            {
+              pane: overlayPane,
+              color: fill,
+              fillColor: fill,
+              fillOpacity: 0.35,
+              opacity: 0.9,
+              weight: 1.5
+            }
+          );
+          layer.bindPopup(popupHtml, popupOptions);
+          overlayLayer.addLayer(layer);
+          continue;
+        }
+
+        const layer = leaflet.polygon(buildHexPoints({
+          center,
+          radiusMeters: cell.radiusMeters
+        }), {
           pane: overlayPane,
-          radius: cell.radiusMeters,
           color: fill,
           fillColor: fill,
-          fillOpacity: 0.42,
+          fillOpacity: 0.35,
           opacity: 0.9,
           weight: 1.5
         });
         layer.bindPopup(popupHtml, popupOptions);
         overlayLayer.addLayer(layer);
-        continue;
       }
-
-      if (currentShape === 'square') {
-        const layer = leaflet.rectangle(
-          buildSquareBounds({
-            center: cell.center,
-            radiusMeters: cell.radiusMeters
-          }),
-          {
-            pane: overlayPane,
-            color: fill,
-            fillColor: fill,
-            fillOpacity: 0.35,
-            opacity: 0.9,
-            weight: 1.5
-          }
-        );
-        layer.bindPopup(popupHtml, popupOptions);
-        overlayLayer.addLayer(layer);
-        continue;
-      }
-
-      const layer = leaflet.polygon(buildHexPoints({
-        center: cell.center,
-        radiusMeters: cell.radiusMeters
-      }), {
-        pane: overlayPane,
-        color: fill,
-        fillColor: fill,
-        fillOpacity: 0.35,
-        opacity: 0.9,
-        weight: 1.5
-      });
-      layer.bindPopup(popupHtml, popupOptions);
-      overlayLayer.addLayer(layer);
     }
   };
 
@@ -672,18 +749,11 @@
     });
     resizeObserver.observe(container);
 
-    map.on('moveend', emitViewport);
+    map.on('moveend', handleMoveEnd);
     requestAnimationFrame(() => {
       map?.invalidateSize();
     });
-    emitViewport();
-    render({
-      currentPoints: points,
-      currentAggregates: aggregates,
-      currentMode: mode,
-      currentShape: shape,
-      currentColorScale: colorScale
-    });
+    handleMoveEnd();
   });
 
   onDestroy(() => {

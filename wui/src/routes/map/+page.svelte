@@ -716,6 +716,36 @@
     `${track.rowCount} ${t('radtrack-common_readings-label')}`
   ].join(' / ');
 
+  const getMetricLabel = (metric: MapFilters['metric']) => {
+    switch (metric) {
+      case 'count_rate':
+        return t('radtrack-common_count_rate-label');
+      case 'accuracy':
+        return t('radtrack-common_accuracy-label');
+      case 'dose_rate':
+      default:
+        return t('radtrack-common_dose_rate-label');
+    }
+  };
+
+  const getAggregateStatLabel = (aggregateStat: MapFilters['aggregateStat']) => {
+    switch (aggregateStat) {
+      case 'min':
+        return t('radtrack-common_min-label');
+      case 'max':
+        return t('radtrack-common_max-label');
+      case 'median':
+        return t('radtrack-common_median-label');
+      case 'mode':
+        return t('radtrack-common_mode-label');
+      case 'count':
+        return t('radtrack-common_count-label');
+      case 'mean':
+      default:
+        return t('radtrack-common_mean-label');
+    }
+  };
+
   const selectionChipClass = ({ count }: { count: number }) => count ? 'chip start' : 'chip subtle';
 
   const sortDatasets = ({ values }: { values: DatasetOption[] }) => [...values].sort((left, right) => (
@@ -736,9 +766,14 @@
     viewport
   }));
 
+  const activeMetric = $derived(activeQuery?.filters.metric ?? filters.metric);
   const activeMode = $derived(activeQuery?.filters.mode ?? filters.mode);
   const activeShape = $derived(activeQuery?.filters.shape ?? filters.shape);
   const activeAggregateStat = $derived(activeQuery?.filters.aggregateStat ?? filters.aggregateStat);
+  const activeLegendSummary = $derived.by(() => t('radtrack-map_legend_summary-label', {
+    metric: getMetricLabel(activeMetric),
+    stat: getAggregateStatLabel(activeAggregateStat)
+  }));
   const activeAppliedCellSizeMeters = $derived(activeQuery?.filters.appliedCellSizeMeters ?? effectiveCellSizeMeters);
   const visibleRawPointCount = $derived.by(() => {
     if (activeMode !== 'aggregate') {
@@ -1571,7 +1606,7 @@
             <details class="panel map-overlay-card" open>
               <summary>
                 <span>{t('radtrack-map_legend-title')}</span>
-                <span class="chip subtle">{t('radtrack-map_aggregate_stat-label')}</span>
+                <span class="chip subtle">{activeLegendSummary}</span>
               </summary>
 
               <div class="legend-bar"></div>
@@ -1906,6 +1941,10 @@
 
   .map-overlay-basemap-card {
     width: min(16rem, calc(100vw - (var(--space-4) * 2)));
+  }
+
+  .legend-bar {
+    margin-bottom: var(--space-1);
   }
 
   .legend-scale-row {

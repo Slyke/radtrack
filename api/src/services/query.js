@@ -9,6 +9,9 @@ const aggregatePopupMetrics = [
   { key: 'accuracy', column: 'accuracy' },
   { key: 'temperatureC', column: 'temperature_c' }
 ];
+const worldWidthDegrees = 360;
+const canonicalMinLongitude = -180;
+const canonicalMaxLongitude = 180;
 
 const coerceNumber = ({ value }) => {
   if (value === undefined || value === null || value === '') {
@@ -84,20 +87,87 @@ const hasViewportFilter = ({ filter }) => (
   && filter.maxLon !== null
 );
 
+const wrapLongitude = ({ longitude }) => (
+  ((((longitude + 180) % worldWidthDegrees) + worldWidthDegrees) % worldWidthDegrees) - 180
+);
+
+const buildLongitudeViewport = ({
+  minLon,
+  maxLon
+}) => {
+  if (minLon === null || maxLon === null) {
+    return null;
+  }
+
+  const span = maxLon - minLon;
+  if (!Number.isFinite(span)) {
+    return null;
+  }
+
+  if (span >= worldWidthDegrees) {
+    return {
+      span,
+      spansWorld: true,
+      ranges: [
+        {
+          minLon: canonicalMinLongitude,
+          maxLon: canonicalMaxLongitude
+        }
+      ]
+    };
+  }
+
+  const normalizedMinLon = wrapLongitude({ longitude: minLon });
+  const normalizedMaxLon = normalizedMinLon + span;
+
+  if (normalizedMaxLon <= canonicalMaxLongitude) {
+    return {
+      span,
+      spansWorld: false,
+      ranges: [
+        {
+          minLon: normalizedMinLon,
+          maxLon: normalizedMaxLon
+        }
+      ]
+    };
+  }
+
+  return {
+    span,
+    spansWorld: false,
+    ranges: [
+      {
+        minLon: normalizedMinLon,
+        maxLon: canonicalMaxLongitude
+      },
+      {
+        minLon: canonicalMinLongitude,
+        maxLon: normalizedMaxLon - worldWidthDegrees
+      }
+    ]
+  };
+};
+
 const buildAggregateCacheViewport = ({ filter }) => {
   if (!hasViewportFilter({ filter })) {
     return null;
   }
 
   const latSpan = Math.max(filter.maxLat - filter.minLat, 0.01);
-  const lonSpan = Math.max(filter.maxLon - filter.minLon, 0.01);
+  const longitudeViewport = buildLongitudeViewport({
+    minLon: filter.minLon,
+    maxLon: filter.maxLon
+  });
+  const lonSpan = Math.max(longitudeViewport?.span ?? (filter.maxLon - filter.minLon), 0.01);
   const latAnchorStep = Math.max(latSpan / 2, 0.005);
   const lonAnchorStep = Math.max(lonSpan / 2, 0.005);
   const latWindowSpan = Math.max(latSpan * 2, 0.02);
   const lonWindowSpan = Math.max(lonSpan * 2, 0.02);
 
   const snappedMinLat = Math.floor(filter.minLat / latAnchorStep) * latAnchorStep;
-  const snappedMinLon = Math.floor(filter.minLon / lonAnchorStep) * lonAnchorStep;
+  const cacheMinLon = longitudeViewport?.ranges[0]?.minLon ?? filter.minLon;
+  const snappedMinLon = Math.floor(cacheMinLon / lonAnchorStep) * lonAnchorStep;
 
   return {
     minLat: snappedMinLat,
@@ -120,17 +190,29 @@ const clipAggregateCellsToViewport = ({
     return cells;
   }
 
+  const longitudeViewport = buildLongitudeViewport({
+    minLon: viewport.minLon,
+    maxLon: viewport.maxLon
+  });
+
   return cells.filter((cell) => {
     const latOffset = cell.radiusMeters / 111320;
     const lonOffset = cell.radiusMeters / (
       Math.cos((cell.center.latitude * Math.PI) / 180) * 111320 || Number.EPSILON
     );
+    const matchesLongitude = longitudeViewport?.spansWorld
+      ? true
+      : (
+        longitudeViewport?.ranges.some((range) => (
+          (cell.center.longitude + lonOffset) >= range.minLon
+          && (cell.center.longitude - lonOffset) <= range.maxLon
+        )) ?? true
+      );
 
     return (
       (cell.center.latitude + latOffset) >= viewport.minLat
       && (cell.center.latitude - latOffset) <= viewport.maxLat
-      && (cell.center.longitude + lonOffset) >= viewport.minLon
-      && (cell.center.longitude - lonOffset) <= viewport.maxLon
+      && matchesLongitude
     );
   });
 };
@@ -327,6 +409,12 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
 
     const params = [datasetIds];
     const where = ['t.dataset_id = ANY($1::text[])'];
+    const longitudeViewport = includeViewport
+      ? buildLongitudeViewport({
+          minLon: filter.minLon,
+          maxLon: filter.maxLon
+        })
+      : null;
 
     if (!filter.includeHidden) {
       where.push('r.is_hidden = FALSE');
@@ -353,14 +441,17 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         where.push(`r.latitude <= $${params.length}`);
       }
 
-      if (filter.minLon !== null) {
-        params.push(filter.minLon);
-        where.push(`r.longitude >= $${params.length}`);
-      }
+      if (longitudeViewport && !longitudeViewport.spansWorld) {
+        const longitudeClauses = longitudeViewport.ranges.map((range) => {
+          params.push(range.minLon);
+          const minParamIndex = params.length;
+          params.push(range.maxLon);
+          const maxParamIndex = params.length;
 
-      if (filter.maxLon !== null) {
-        params.push(filter.maxLon);
-        where.push(`r.longitude <= $${params.length}`);
+          return `(r.longitude >= $${minParamIndex} AND r.longitude <= $${maxParamIndex})`;
+        });
+
+        where.push(`(${longitudeClauses.join(' OR ')})`);
       }
     }
 

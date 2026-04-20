@@ -217,6 +217,7 @@
   "radtrack-map_failed_selectors": "Failed to load selectors",
   "radtrack-map_hidden_reason": "Hidden from map explorer",
   "radtrack-map_legend-title": "Legend",
+  "radtrack-map_legend_summary-label": "{$metric} {$stat}",
   "radtrack-map_auto_update-label": "Auto update map",
   "radtrack-map_auto_cell_size-label": "Auto detect cell size from zoom",
   "radtrack-map_auto_scale-label": "Auto scale low, mid, and high",
