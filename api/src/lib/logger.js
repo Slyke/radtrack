@@ -42,15 +42,19 @@ const parseInteger = ({ value, fallback }) => {
   return Number.isNaN(parsed) ? fallback : parsed;
 };
 
-const parseLevels = ({ value }) => {
+const parseLevels = ({ value, fallback = [] }) => {
   if (!value) {
-    return [];
+    return fallback;
   }
 
-  return String(value)
-    .split(',')
-    .map((entry) => entry.trim().toLowerCase())
+  const rawValues = Array.isArray(value)
+    ? value
+    : String(value).split(',');
+  const parsed = rawValues
+    .map((entry) => String(entry).trim().toLowerCase())
     .filter((entry) => entry && levels.includes(entry));
+
+  return parsed.length ? parsed : fallback;
 };
 
 const redact = ({ value }) => {
@@ -139,14 +143,30 @@ const ensureDirectory = ({ filePath }) => {
   mkdirSync(dir, { recursive: true });
 };
 
-export const createLogger = () => {
-  const consoleEnabled = parseBoolean({ value: process.env.LOG_CONSOLE_ENABLED, fallback: true });
-  const consoleFormat = String(process.env.LOG_CONSOLE_FORMAT ?? 'text').toLowerCase() === 'json' ? 'json' : 'text';
-  const consoleLevels = parseLevels({ value: process.env.LOG_CONSOLE_LEVELS });
-  const fileEnabled = parseBoolean({ value: process.env.LOG_FILE_ENABLED, fallback: false });
-  const fileFormat = String(process.env.LOG_FILE_FORMAT ?? 'json').toLowerCase() === 'text' ? 'text' : 'json';
-  const filePath = process.env.LOG_FILE_PATH ?? '';
-  const fileLevels = parseLevels({ value: process.env.LOG_FILE_LEVELS });
+export const createLogger = ({ config = null } = {}) => {
+  const consoleEnabled = parseBoolean({
+    value: process.env.LOG_CONSOLE_ENABLED,
+    fallback: config?.sinks?.console?.enabled ?? true
+  });
+  const consoleFormat = String(process.env.LOG_CONSOLE_FORMAT ?? config?.sinks?.console?.format ?? 'text').toLowerCase() === 'json'
+    ? 'json'
+    : 'text';
+  const consoleLevels = parseLevels({
+    value: process.env.LOG_CONSOLE_LEVELS,
+    fallback: config?.sinks?.console?.levels ?? []
+  });
+  const fileEnabled = parseBoolean({
+    value: process.env.LOG_FILE_ENABLED,
+    fallback: config?.sinks?.file?.enabled ?? false
+  });
+  const fileFormat = String(process.env.LOG_FILE_FORMAT ?? config?.sinks?.file?.format ?? 'json').toLowerCase() === 'text'
+    ? 'text'
+    : 'json';
+  const filePath = process.env.LOG_FILE_PATH ?? config?.sinks?.file?.path ?? '';
+  const fileLevels = parseLevels({
+    value: process.env.LOG_FILE_LEVELS,
+    fallback: config?.sinks?.file?.levels ?? []
+  });
   const textTemplate = process.env.LOG_TEXT_FORMAT || textTemplateDefault;
   const kubernetes = resolveKubernetesMetadata();
   const httpTimeoutMs = parseInteger({ value: process.env.LOG_HTTP_TIMEOUT_MS, fallback: 2500 });

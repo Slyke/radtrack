@@ -71,8 +71,9 @@
     dataValues: Record<string, string[]>;
     cache?: {
       hit: boolean;
-      key: string;
-      source: 'cache' | 'computed';
+      reason?: string | null;
+      key: string | null;
+      source: 'cache' | 'computed' | 'disabled';
       ttlSecondsRemaining: number | null;
     };
   };
@@ -362,13 +363,17 @@
   }) => {
     switch (metricKey) {
       case 'radtrackCacheKey':
-        return cell.cache?.key ? [cell.cache.key] : [];
+        return cell.cache
+          ? [cell.cache.key ?? t('radtrack-common_na-label')]
+          : [];
       case 'radtrackCacheSource':
-        return cell.cache?.source ? [cell.cache.source] : [];
+        return cell.cache?.source
+          ? [cell.cache.reason ? `${cell.cache.source} (${cell.cache.reason})` : cell.cache.source]
+          : [];
       case 'radtrackCacheTtlSeconds':
-        return cell.cache?.ttlSecondsRemaining === null || cell.cache?.ttlSecondsRemaining === undefined
-          ? []
-          : [String(cell.cache.ttlSecondsRemaining)];
+        return cell.cache
+          ? [cell.cache.ttlSecondsRemaining === null ? t('radtrack-common_na-label') : String(cell.cache.ttlSecondsRemaining)]
+          : [];
       default:
         return [];
     }
@@ -638,12 +643,6 @@
     </div>
   `;
 
-  const getAggregatePopupSectionPriority = ({ metricKey }: { metricKey: string }) => (
-    metricValueTypes[metricKey] === 'time' || isAggregateTimePropKey(metricKey)
-      ? 0
-      : 1
-  );
-
   const buildRawPopupHtml = ({ point }: { point: MapPoint }) => {
     const rows: string[] = [];
 
@@ -686,7 +685,7 @@
   };
 
   const buildAggregatePopupHtml = ({ cell }: { cell: AggregateCell }) => {
-    const sections: Array<{ html: string; priority: number }> = [];
+    const sections: string[] = [];
     const timeRange = popupFields.metrics.occurredAt
       ? buildAggregateTimeRange({ timeRange: cell.timeRange })
       : null;
@@ -706,35 +705,43 @@
           stats: cell.metrics[aggregateTimeBasePropKey]
         });
         if (rows) {
-          sections.push({
-            html: buildPopupSectionHtml({
+          sections.push(
+            buildPopupSectionHtml({
               title: getMetricLabel(metricKey),
               body: buildPopupMetricTableHtml({
                 metricKey,
                 rows
               })
-            }),
-            priority: getAggregatePopupSectionPriority({ metricKey })
-          });
+            })
+          );
         }
         continue;
       }
 
+      const syntheticValues = getAggregateSyntheticValues({ metricKey, cell });
+      if (syntheticValues.length) {
+        sections.push(
+          buildPopupSectionHtml({
+            title: getMetricLabel(metricKey),
+            body: buildPopupValueListHtml({
+              values: [...new Set(syntheticValues)]
+            })
+          })
+        );
+        continue;
+      }
+
       if (metricValueTypes[metricKey] === 'string') {
-        const values = [
-          ...(cell.dataValues?.[metricKey] ?? []),
-          ...getAggregateSyntheticValues({ metricKey, cell })
-        ];
+        const values = cell.dataValues?.[metricKey] ?? [];
         if (values.length) {
-          sections.push({
-            html: buildPopupSectionHtml({
+          sections.push(
+            buildPopupSectionHtml({
               title: getMetricLabel(metricKey),
               body: buildPopupValueListHtml({
                 values: [...new Set(values)]
               })
-            }),
-            priority: getAggregatePopupSectionPriority({ metricKey })
-          });
+            })
+          );
         }
         continue;
       }
@@ -745,16 +752,15 @@
           cell
         });
         if (rows) {
-          sections.push({
-            html: buildPopupSectionHtml({
+          sections.push(
+            buildPopupSectionHtml({
               title: getMetricLabel(metricKey),
               body: buildPopupMetricTableHtml({
                 metricKey,
                 rows
               })
-            }),
-            priority: getAggregatePopupSectionPriority({ metricKey })
-          });
+            })
+          );
         }
         continue;
       }
@@ -764,22 +770,17 @@
         stats: cell.metrics[metricKey]
       });
       if (rows) {
-        sections.push({
-          html: buildPopupSectionHtml({
+        sections.push(
+          buildPopupSectionHtml({
             title: getMetricLabel(metricKey),
             body: buildPopupMetricTableHtml({
               metricKey,
               rows
             })
-          }),
-          priority: getAggregatePopupSectionPriority({ metricKey })
-        });
+          })
+        );
       }
     }
-
-    const orderedSections = sections
-      .sort((left, right) => left.priority - right.priority)
-      .map((section) => section.html);
 
     return `
       <div class="map-popup">
@@ -788,7 +789,7 @@
           subtitle: timeRange,
           badge
         })}
-        ${orderedSections.length ? `<div class="map-popup-scroll">${orderedSections.join('')}</div>` : ''}
+        ${sections.length ? `<div class="map-popup-scroll">${sections.join('')}</div>` : ''}
       </div>
     `;
   };

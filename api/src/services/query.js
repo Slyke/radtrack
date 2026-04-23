@@ -1,4 +1,5 @@
 import { createAppError } from '../lib/errors.js';
+import { logFeature } from '../lib/feature-logging.js';
 import {
   getCoreMetricColumn,
   isSyntheticPopupField,
@@ -12,7 +13,7 @@ const worldWidthDegrees = 360;
 const canonicalMinLongitude = -180;
 const canonicalMaxLongitude = 180;
 const rowTimestampSql = 'COALESCE(r.occurred_at, r.received_at)';
-const historicalQueryCacheTtlSeconds = 5 * 60;
+const defaultHistoricalQueryCacheTtlSeconds = 5 * 60;
 const rawPointQueryCacheVersion = 'v1';
 const aggregateQueryCacheVersion = 'v2';
 const aggregateCellCacheVersion = 'v3';
@@ -191,6 +192,14 @@ const resolveEffectiveTimeWindow = ({
   correlationId = null,
   now = new Date()
 }) => {
+  if (filter.timeFilterMode === 'none') {
+    return {
+      dateFrom: null,
+      dateTo: null,
+      historicalCacheEligible: true
+    };
+  }
+
   if (filter.timeFilterMode === 'relative') {
     const relativeAmount = coercePositiveInteger({ value: filter.relativeAmount });
     if (!relativeAmount || !filter.relativeUnit) {
@@ -593,7 +602,68 @@ const buildAggregateCellPayload = ({
   };
 };
 
-export const createQueryService = ({ db, cache, settingsService, datasetService }) => {
+export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsService, datasetService }) => {
+  const getHistoricalQueryCacheTtlSeconds = ({ uiConfig }) => {
+    const ttlSeconds = Number(uiConfig.cacheTtlSeconds);
+    return Number.isFinite(ttlSeconds) && ttlSeconds > 0
+      ? Math.trunc(ttlSeconds)
+      : defaultHistoricalQueryCacheTtlSeconds;
+  };
+
+  const getCacheEligibilityReason = ({ prepared }) => {
+    if (prepared.historicalCacheEligible) {
+      return 'eligible';
+    }
+
+    if (prepared.filter.timeFilterMode === 'relative') {
+      return 'relative-time-filter';
+    }
+
+    if (!prepared.filter.dateTo) {
+      return 'missing-historical-end-time';
+    }
+
+    if (!prepared.filter.historicalCacheEligible) {
+      return 'request-not-marked-historical';
+    }
+
+    return 'not-eligible';
+  };
+
+  const logQueryFeature = ({
+    caller,
+    context = null,
+    correlationId = null,
+    level = 'debug',
+    message
+  }) => logFeature({
+    caller,
+    context,
+    correlationId,
+    feature: 'query',
+    level,
+    logger,
+    message,
+    runtimeConfig
+  });
+
+  const logCacheFeature = ({
+    caller,
+    context = null,
+    correlationId = null,
+    level = 'debug',
+    message
+  }) => logFeature({
+    caller,
+    context,
+    correlationId,
+    feature: 'cache',
+    level,
+    logger,
+    message,
+    runtimeConfig
+  });
+
   const buildAggregateCellCacheContext = ({
     user,
     datasetIds,
@@ -633,12 +703,14 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
   const buildCacheMeta = ({
     key = null,
     hit,
-    source = 'computed',
+    reason = null,
+    source = null,
     ttlSecondsRemaining = null
   }) => ({
     hit,
     key,
-    source,
+    reason,
+    source: source ?? (key ? 'computed' : 'disabled'),
     ttlSecondsRemaining
   });
 
@@ -1093,6 +1165,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
 
   const getRawPoints = async ({ user, input, correlationId = null }) => {
     const uiConfig = await settingsService.getUiConfig();
+    const historicalQueryCacheTtlSeconds = getHistoricalQueryCacheTtlSeconds({ uiConfig });
     const prepared = await prepareResolvedFilter({
       user,
       input,
@@ -1100,6 +1173,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     });
     const limit = prepared.filter.limit ?? uiConfig.rawPointCap;
     const cacheEnabled = prepared.historicalCacheEligible;
+    const cacheEligibilityReason = getCacheEligibilityReason({ prepared });
     const cacheKeyDatasets = prepared.datasetIds.slice().sort().join(',') || 'none';
     const cacheKey = cacheEnabled
       ? buildRawPointCacheKey({
@@ -1117,6 +1191,23 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         })
       : null;
 
+    logQueryFeature({
+      caller: 'query::getRawPoints',
+      correlationId,
+      level: 'debug',
+      message: 'Raw point query prepared.',
+      context: {
+        cacheEnabled,
+        cacheEligibilityReason,
+        datasetCount: prepared.datasetIds.length,
+        dateFrom: prepared.filter.dateFrom,
+        dateTo: prepared.filter.dateTo,
+        forceRecheck: prepared.filter.forceRecheck,
+        limit,
+        timeFilterMode: prepared.filter.timeFilterMode
+      }
+    });
+
     if (cacheEnabled && prepared.filter.forceRecheck) {
       await cache.deleteKey({ key: cacheKey });
     }
@@ -1128,6 +1219,16 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         includeMeta: true
       });
       if (cached) {
+        logCacheFeature({
+          caller: 'query::getRawPoints.cache',
+          correlationId,
+          level: 'info',
+          message: 'Raw point query cache hit.',
+          context: {
+            cacheKey,
+            ttlSecondsRemaining: cached.ttlSecondsRemaining
+          }
+        });
         return {
           ...cached.value,
           cache: buildCacheMeta({
@@ -1154,9 +1255,21 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     });
 
     if (!cacheEnabled) {
+      logCacheFeature({
+        caller: 'query::getRawPoints.cache',
+        correlationId,
+        level: 'debug',
+        message: 'Raw point query cache skipped.',
+        context: {
+          cacheEligibilityReason
+        }
+      });
       return {
         ...response,
-        cache: buildCacheMeta({ hit: false })
+        cache: buildCacheMeta({
+          hit: false,
+          reason: cacheEligibilityReason
+        })
       };
     }
 
@@ -1166,6 +1279,17 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       ttlSeconds: historicalQueryCacheTtlSeconds
     });
     const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
+    logCacheFeature({
+      caller: 'query::getRawPoints.cache',
+      correlationId,
+      level: 'info',
+      message: 'Raw point query cache written.',
+      context: {
+        cacheKey,
+        ttlSeconds: historicalQueryCacheTtlSeconds,
+        ttlSecondsRemaining
+      }
+    });
     return {
       ...response,
       cache: buildCacheMeta({
@@ -1179,6 +1303,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
 
   const getAggregates = async ({ user, input, correlationId = null }) => {
     const uiConfig = await settingsService.getUiConfig();
+    const historicalQueryCacheTtlSeconds = getHistoricalQueryCacheTtlSeconds({ uiConfig });
     const requestFilter = normalizeFilterInput({ input });
     const viewportFilter = {
       minLat: requestFilter.minLat,
@@ -1204,6 +1329,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     const cellSizeMeters = prepared.filter.cellSizeMeters ?? uiConfig.defaultCellSizeMeters;
     const modeBucketDecimals = prepared.filter.modeBucketDecimals ?? uiConfig.modeBucketDecimals;
     const cacheEnabled = prepared.historicalCacheEligible;
+    const cacheEligibilityReason = getCacheEligibilityReason({ prepared });
     const cacheKeyDatasets = prepared.datasetIds.slice().sort().join(',') || 'none';
     const cellCacheContext = cacheEnabled
       ? buildAggregateCellCacheContext({
@@ -1231,6 +1357,27 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         })
       : null;
 
+    logQueryFeature({
+      caller: 'query::getAggregates',
+      correlationId,
+      level: 'debug',
+      message: 'Aggregate query prepared.',
+      context: {
+        cacheEnabled,
+        cacheEligibilityReason,
+        cacheViewportEnabled: Boolean(cacheViewport),
+        cellSizeMeters,
+        datasetCount: prepared.datasetIds.length,
+        dateFrom: prepared.filter.dateFrom,
+        dateTo: prepared.filter.dateTo,
+        forceRecheck: prepared.filter.forceRecheck,
+        modeBucketDecimals,
+        shape: prepared.filter.shape,
+        timeFilterMode: prepared.filter.timeFilterMode,
+        zoom: requestFilter.zoom
+      }
+    });
+
     if (cacheEnabled && prepared.filter.forceRecheck) {
       await cache.deleteKey({ key: cacheKey });
       await cache.deletePattern({ pattern: cellCacheContext.invalidatePattern });
@@ -1246,6 +1393,18 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         const visibleCells = clipAggregateCellsToViewport({
           cells: cached.value.cells,
           viewport: viewportFilter
+        });
+        logCacheFeature({
+          caller: 'query::getAggregates.cache',
+          correlationId,
+          level: 'info',
+          message: 'Aggregate query cache hit.',
+          context: {
+            cacheKey,
+            cachedCellCount: cached.value.cells.length,
+            visibleCellCount: visibleCells.length,
+            ttlSecondsRemaining: cached.ttlSecondsRemaining
+          }
         });
 
         return {
@@ -1285,9 +1444,21 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       };
 
       if (!cacheEnabled) {
+        logCacheFeature({
+          caller: 'query::getAggregates.cache',
+          correlationId,
+          level: 'debug',
+          message: 'Empty aggregate query cache skipped.',
+          context: {
+            cacheEligibilityReason
+          }
+        });
         return {
           ...empty,
-          cache: buildCacheMeta({ hit: false })
+          cache: buildCacheMeta({
+            hit: false,
+            reason: cacheEligibilityReason
+          })
         };
       }
 
@@ -1297,6 +1468,17 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         ttlSeconds: historicalQueryCacheTtlSeconds
       });
       const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
+      logCacheFeature({
+        caller: 'query::getAggregates.cache',
+        correlationId,
+        level: 'info',
+        message: 'Empty aggregate query cache written.',
+        context: {
+          cacheKey,
+          ttlSeconds: historicalQueryCacheTtlSeconds,
+          ttlSecondsRemaining
+        }
+      });
       return {
         ...empty,
         cache: buildCacheMeta({
@@ -1355,6 +1537,21 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         });
       })
     );
+    logCacheFeature({
+      caller: 'query::getAggregates.cache',
+      correlationId,
+      level: 'debug',
+      message: cacheEnabled ? 'Aggregate cell cache resolution completed.' : 'Aggregate cell cache skipped.',
+      context: {
+        cacheEnabled,
+        cacheEligibilityReason,
+        cellCount: resolvedCells.length,
+        cellsWithCacheMeta: resolvedCells.filter((cell) => Boolean(cell.cache)).length,
+        cellsWithCacheKey: resolvedCells.filter((cell) => Boolean(cell.cache?.key)).length,
+        cellsWithTtl: resolvedCells.filter((cell) => cell.cache?.ttlSecondsRemaining !== null && cell.cache?.ttlSecondsRemaining !== undefined).length,
+        sampleCache: resolvedCells.find((cell) => cell.cache)?.cache ?? null
+      }
+    });
 
     const fullResponse = {
       datasetIds: prepared.datasetIds,
@@ -1367,13 +1564,26 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     };
 
     if (!cacheEnabled) {
+      logCacheFeature({
+        caller: 'query::getAggregates.cache',
+        correlationId,
+        level: 'debug',
+        message: 'Aggregate query cache skipped.',
+        context: {
+          cacheEligibilityReason,
+          responseCellCount: resolvedCells.length
+        }
+      });
       return {
         ...fullResponse,
         cells: clipAggregateCellsToViewport({
           cells: resolvedCells,
           viewport: viewportFilter
         }),
-        cache: buildCacheMeta({ hit: false })
+        cache: buildCacheMeta({
+          hit: false,
+          reason: cacheEligibilityReason
+        })
       };
     }
 
@@ -1383,6 +1593,19 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       ttlSeconds: historicalQueryCacheTtlSeconds
     });
     const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
+    logCacheFeature({
+      caller: 'query::getAggregates.cache',
+      correlationId,
+      level: 'info',
+      message: 'Aggregate query cache written.',
+      context: {
+        cacheKey,
+        responseCellCount: fullResponse.cells.length,
+        returnedCellCount: resolvedCells.length,
+        ttlSeconds: historicalQueryCacheTtlSeconds,
+        ttlSecondsRemaining
+      }
+    });
     return {
       ...fullResponse,
       cells: clipAggregateCellsToViewport({

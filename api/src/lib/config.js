@@ -18,6 +18,8 @@ const readJson5 = async ({ filePath, correlationId }) => {
   }
 };
 
+const logLevels = ['debug', 'info', 'warn', 'error'];
+
 const requiredString = ({ value, field, correlationId }) => {
   if (typeof value === 'string' && value.trim()) {
     return value.trim();
@@ -52,6 +54,90 @@ const asInteger = ({ value, fallback }) => {
   const parsed = Number.parseInt(String(value), 10);
   return Number.isNaN(parsed) ? fallback : parsed;
 };
+
+const asStringArray = ({ value, fallback = [] }) => {
+  if (Array.isArray(value)) {
+    return value.map((entry) => String(entry)).filter(Boolean);
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return value.split(',').map((entry) => entry.trim()).filter(Boolean);
+  }
+
+  return fallback;
+};
+
+const asLogLevel = ({ value, fallback = 'info' }) => {
+  const normalized = String(value ?? '').toLowerCase();
+  return logLevels.includes(normalized) ? normalized : fallback;
+};
+
+const asLogLevels = ({ value, fallback }) => {
+  const parsed = asStringArray({ value, fallback: [] })
+    .map((entry) => entry.toLowerCase())
+    .filter((entry) => logLevels.includes(entry));
+  return parsed.length ? parsed : fallback;
+};
+
+const normalizeFeatureLogging = ({ value, fallbackLevel = 'debug' }) => {
+  if (typeof value === 'boolean') {
+    return {
+      enabled: value,
+      level: fallbackLevel
+    };
+  }
+
+  if (typeof value === 'string') {
+    return {
+      enabled: true,
+      level: asLogLevel({ value, fallback: fallbackLevel })
+    };
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return {
+      enabled: false,
+      level: fallbackLevel
+    };
+  }
+
+  return {
+    enabled: asBoolean({ value: value.enabled, fallback: false }),
+    level: asLogLevel({ value: value.level, fallback: fallbackLevel })
+  };
+};
+
+const normalizeLoggingConfig = ({ value }) => ({
+  sinks: {
+    console: {
+      enabled: asBoolean({ value: value?.sinks?.console?.enabled, fallback: true }),
+      levels: asLogLevels({
+        value: value?.sinks?.console?.levels,
+        fallback: ['info', 'warn', 'error']
+      }),
+      format: value?.sinks?.console?.format === 'json' ? 'json' : 'text'
+    },
+    file: {
+      enabled: asBoolean({ value: value?.sinks?.file?.enabled, fallback: false }),
+      levels: asLogLevels({
+        value: value?.sinks?.file?.levels,
+        fallback: ['info', 'warn', 'error']
+      }),
+      format: value?.sinks?.file?.format === 'text' ? 'text' : 'json',
+      path: typeof value?.sinks?.file?.path === 'string' ? value.sinks.file.path : ''
+    }
+  },
+  features: {
+    cache: normalizeFeatureLogging({
+      value: value?.features?.cache,
+      fallbackLevel: 'debug'
+    }),
+    query: normalizeFeatureLogging({
+      value: value?.features?.query,
+      fallbackLevel: 'debug'
+    })
+  }
+});
 
 export const loadRuntimeConfig = async ({ correlationId = null } = {}) => {
   const configPath = process.env.RADTRACK_CONFIG_PATH ?? '';
@@ -100,6 +186,7 @@ export const loadRuntimeConfig = async ({ correlationId = null } = {}) => {
     redis: {
       url: requiredString({ value: rawConfig?.redis?.url, field: 'redis.url', correlationId })
     },
+    logging: normalizeLoggingConfig({ value: rawConfig?.logging }),
     auth: {
       localEnabled: asBoolean({ value: rawConfig?.auth?.localEnabled, fallback: true }),
       oidcEnabled: asBoolean({ value: rawConfig?.auth?.oidcEnabled, fallback: false }),

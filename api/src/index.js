@@ -162,8 +162,8 @@ const loadMonolithHandler = async ({ runtimeConfig, logger, correlationId }) => 
 
 const main = async () => {
   const startupCorrelationId = createCorrelationId();
-  const logger = createLogger();
   const runtimeConfig = await loadRuntimeConfig({ correlationId: startupCorrelationId });
+  const logger = createLogger({ config: runtimeConfig.logging });
   const buildInfo = getBuildInfo();
   const db = await createDatabase({ runtimeConfig, logger, correlationId: startupCorrelationId });
   const cache = await createCache({ runtimeConfig, logger, correlationId: startupCorrelationId });
@@ -173,7 +173,7 @@ const main = async () => {
   const authService = createAuthService({ db, runtimeConfig, logger, audit });
   const importService = createImportService({ db, audit, logger });
   const datalogService = createDatalogService({ db, audit, datasetService });
-  const queryService = createQueryService({ db, cache, settingsService, datasetService });
+  const queryService = createQueryService({ db, cache, logger, runtimeConfig, settingsService, datasetService });
   const exportService = createExportService({ db, queryService, settingsService });
 
   await settingsService.seedRuntimeSettings({ correlationId: startupCorrelationId });

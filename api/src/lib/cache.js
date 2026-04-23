@@ -1,5 +1,6 @@
 import { createClient } from 'redis';
 import { createAppError } from './errors.js';
+import { logFeature } from './feature-logging.js';
 
 export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
   const client = createClient({ url: runtimeConfig.redis.url });
@@ -16,6 +17,18 @@ export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
 
   try {
     await client.connect();
+    logFeature({
+      caller: 'cache::createCache',
+      feature: 'cache',
+      level: 'info',
+      logger,
+      message: 'Redis cache connected.',
+      correlationId,
+      runtimeConfig,
+      context: {
+        url: runtimeConfig.redis.url.replace(/\/\/([^:@/]+):([^@/]+)@/, '//<redacted>:<redacted>@')
+      }
+    });
   } catch (cause) {
     throw createAppError({
       caller: 'cache::createCache',
@@ -31,6 +44,19 @@ export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
       client.get(key),
       includeMeta ? client.ttl(key) : Promise.resolve(null)
     ]);
+    logFeature({
+      caller: 'cache::readJson',
+      feature: 'cache',
+      level: 'debug',
+      logger,
+      message: value ? 'Redis cache read hit.' : 'Redis cache read miss.',
+      runtimeConfig,
+      context: {
+        key,
+        includeMeta,
+        ttlSecondsRemaining: typeof ttlValue === 'number' && ttlValue >= 0 ? ttlValue : null
+      }
+    });
     if (!value) {
       return null;
     }
@@ -48,6 +74,18 @@ export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
 
   const writeJson = async ({ key, value, ttlSeconds }) => {
     await client.set(key, JSON.stringify(value), { EX: ttlSeconds });
+    logFeature({
+      caller: 'cache::writeJson',
+      feature: 'cache',
+      level: 'debug',
+      logger,
+      message: 'Redis cache value written.',
+      runtimeConfig,
+      context: {
+        key,
+        ttlSeconds
+      }
+    });
   };
 
   return {
@@ -59,21 +97,64 @@ export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
         return;
       }
 
-      await client.del(key);
+      const deletedCount = await client.del(key);
+      logFeature({
+        caller: 'cache::deleteKey',
+        feature: 'cache',
+        level: 'debug',
+        logger,
+        message: 'Redis cache key delete completed.',
+        runtimeConfig,
+        context: {
+          key,
+          deletedCount
+        }
+      });
     },
     getTtlSeconds: async ({ key }) => {
       const ttlSeconds = await client.ttl(key);
-      return ttlSeconds >= 0 ? ttlSeconds : null;
+      const ttlSecondsRemaining = ttlSeconds >= 0 ? ttlSeconds : null;
+      logFeature({
+        caller: 'cache::getTtlSeconds',
+        feature: 'cache',
+        level: 'debug',
+        logger,
+        message: 'Redis cache TTL checked.',
+        runtimeConfig,
+        context: {
+          key,
+          ttlSecondsRemaining
+        }
+      });
+      return ttlSecondsRemaining;
     },
     deletePattern: async ({ pattern }) => {
-      const keys = [];
-      for await (const key of client.scanIterator({ MATCH: pattern })) {
-        keys.push(key);
+      let deletedCount = 0;
+      let scannedCount = 0;
+      let batchCount = 0;
+      for await (const batchKeys of client.scanIterator({ MATCH: pattern })) {
+        const keys = Array.isArray(batchKeys) ? batchKeys : [batchKeys];
+        scannedCount += keys.length;
+        batchCount += 1;
+        if (keys.length) {
+          deletedCount += await client.del(keys);
+        }
       }
 
-      if (keys.length) {
-        await client.del(keys);
-      }
+      logFeature({
+        caller: 'cache::deletePattern',
+        feature: 'cache',
+        level: 'info',
+        logger,
+        message: 'Redis cache pattern delete completed.',
+        runtimeConfig,
+        context: {
+          pattern,
+          scannedCount,
+          deletedCount,
+          batchCount
+        }
+      });
     },
     close: async () => {
       await client.quit();

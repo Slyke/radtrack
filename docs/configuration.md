@@ -48,6 +48,40 @@ Mutable non-secret settings are seeded from bootstrap files into Postgres and th
 - `PUBLIC_API_URL`: WUI browser-side API base for split deployments
 - `LOG_*` and `K8S_*`: structured logging overrides following `../styleguide`
 
+## Logging
+
+Bootstrap config can define logging sinks and feature logging:
+
+```json5
+logging: {
+  sinks: {
+    console: {
+      enabled: true,
+      levels: ["debug", "info", "warn", "error"],
+      format: "text"
+    },
+    file: {
+      enabled: false,
+      levels: ["info", "warn", "error"],
+      format: "json",
+      path: "/var/log/radtrack/api.jsonl"
+    }
+  },
+  features: {
+    cache: { enabled: true, level: "debug" },
+    query: { enabled: true, level: "debug" }
+  }
+}
+```
+
+`logging.features.cache` logs Redis reads, writes, TTL checks, key deletes, pattern deletes, and aggregate cache hit/write summaries.
+`logging.features.query` logs raw-point and aggregate query preparation, including cache eligibility and the reason a request is not cacheable.
+
+Environment variables still override sink settings:
+
+- `LOG_CONSOLE_ENABLED`, `LOG_CONSOLE_LEVELS`, `LOG_CONSOLE_FORMAT`
+- `LOG_FILE_ENABLED`, `LOG_FILE_LEVELS`, `LOG_FILE_FORMAT`, `LOG_FILE_PATH`
+
 ## Sample Files
 
 - [`../config/radtrack.config.example.json5`](../config/radtrack.config.example.json5)

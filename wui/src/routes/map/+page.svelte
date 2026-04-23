@@ -40,6 +40,14 @@
     count: number;
   };
 
+  type AggregateCache = {
+    hit: boolean;
+    reason?: string | null;
+    key: string | null;
+    source: 'cache' | 'computed' | 'disabled';
+    ttlSecondsRemaining: number | null;
+  };
+
   type AggregateCell = {
     id: string;
     center: {
@@ -55,12 +63,7 @@
     stats: AggregateStats;
     metrics: Record<string, AggregateStats>;
     dataValues: Record<string, string[]>;
-    cache?: {
-      hit: boolean;
-      key: string;
-      source: 'cache' | 'computed';
-      ttlSecondsRemaining: number | null;
-    };
+    cache?: AggregateCache;
   };
 
   type MapPoint = {
@@ -969,6 +972,46 @@
       timeFilterRelativeUnit,
       forceRecheck: false
     };
+  };
+
+  const normalizeAggregateCache = ({ value }: { value: unknown }): AggregateCache | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const ttlSecondsRemaining = record.ttlSecondsRemaining === null || record.ttlSecondsRemaining === undefined
+      ? null
+      : toFiniteNumber(record.ttlSecondsRemaining);
+    return {
+      hit: record.hit === true,
+      reason: typeof record.reason === 'string' && record.reason ? record.reason : null,
+      key: typeof record.key === 'string' && record.key ? record.key : null,
+      source: record.source === 'cache'
+        ? 'cache'
+        : (record.source === 'disabled' ? 'disabled' : 'computed'),
+      ttlSecondsRemaining: ttlSecondsRemaining === null ? null : ttlSecondsRemaining
+    };
+  };
+
+  const resolveAggregateCellCache = ({
+    cellCache,
+    responseCache
+  }: {
+    cellCache: unknown;
+    responseCache: AggregateCache | null;
+  }) => {
+    const normalizedCellCache = normalizeAggregateCache({ value: cellCache });
+    if (!normalizedCellCache) {
+      return responseCache ?? undefined;
+    }
+
+    return normalizedCellCache.ttlSecondsRemaining === null && responseCache?.ttlSecondsRemaining !== null
+      ? {
+          ...normalizedCellCache,
+          ttlSecondsRemaining: responseCache.ttlSecondsRemaining
+        }
+      : normalizedCellCache;
   };
 
   const parseUrlFilterValue = ({ rawValue }: { rawValue: string }) => {
@@ -2084,7 +2127,14 @@
       }
 
       points = [];
-      aggregates = response.result.cells;
+      const responseCache = normalizeAggregateCache({ value: response.result.cache });
+      aggregates = response.result.cells.map((cell: AggregateCell) => ({
+        ...cell,
+        cache: resolveAggregateCellCache({
+          cellCache: cell.cache,
+          responseCache
+        })
+      }));
       completedSuccessfully = true;
     } catch (error) {
       if (requestId !== requestVersion) {
@@ -2869,6 +2919,7 @@
                         [field.propKey]: checked
                       }
                     };
+                    handleFilterChange();
                   }}
                   type="checkbox"
                 />
