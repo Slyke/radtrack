@@ -75,6 +75,20 @@
     resetPasswordResult = response.result.password;
   };
 
+  const canToggleDisabled = (user: any) => user.isDisabled || !user.disableProtectionReason;
+
+  const getDisableProtectionMessage = (user: any) => {
+    if (user.disableProtectionReason === 'bootstrap_admin') {
+      return t('radtrack-users_disable_blocked_bootstrap_admin');
+    }
+
+    if (user.disableProtectionReason === 'external_auth') {
+      return t('radtrack-users_disable_blocked_external_auth');
+    }
+
+    return undefined;
+  };
+
   onMount(loadUsers);
 </script>
 
@@ -141,6 +155,9 @@
                 {#if user.isDisabled}
                   <span class="chip danger">disabled</span>
                 {/if}
+                {#if user.disableProtectionReason}
+                  <span class="chip subtle" title={getDisableProtectionMessage(user)}>{t('radtrack-users_protected-chip')}</span>
+                {/if}
               </div>
             </td>
             <td>
@@ -152,7 +169,14 @@
             </td>
             <td>
               <div class="actions">
-                <button class="warning" onclick={() => toggleDisabled(user)}>{user.isDisabled ? t('radtrack-users_enable-button') : t('radtrack-users_disable-button')}</button>
+                <button
+                  class="warning"
+                  disabled={!canToggleDisabled(user)}
+                  onclick={() => toggleDisabled(user)}
+                  title={canToggleDisabled(user) ? undefined : getDisableProtectionMessage(user)}
+                >
+                  {user.isDisabled ? t('radtrack-users_enable-button') : t('radtrack-users_disable-button')}
+                </button>
                 <button class="danger" onclick={() => resetPassword(user.id)}>{t('radtrack-users_reset_password-button')}</button>
               </div>
             </td>

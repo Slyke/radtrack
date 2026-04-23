@@ -639,6 +639,50 @@ export const createTrackService = ({ db, audit, datasetService }) => {
     return getTrackDetail({ trackId, user, correlationId });
   };
 
+  const updateTrack = async ({ trackId, user, name, correlationId = null }) => {
+    const { track } = await requireEditableTrackAccess({ trackId, user, correlationId });
+
+    const trimmedName = asTrimmedString({
+      value: name,
+      field: 'name',
+      required: true,
+      maxLength: 255,
+      correlationId
+    });
+
+    if (trimmedName === track.track_name) {
+      return {
+        datasetId: track.dataset_id,
+        updated: false
+      };
+    }
+
+    await db.query(
+      `UPDATE tracks
+       SET track_name = $2
+       WHERE id = $1`,
+      [trackId, trimmedName]
+    );
+
+    await audit.record({
+      actorUserId: user.id,
+      scopeUserId: track.owner_user_id,
+      eventType: 'track.updated',
+      entityType: 'track',
+      entityId: trackId,
+      payload: {
+        datasetId: track.dataset_id,
+        oldTrackName: track.track_name,
+        newTrackName: trimmedName
+      }
+    });
+
+    return {
+      datasetId: track.dataset_id,
+      updated: true
+    };
+  };
+
   const deleteTrack = async ({ trackId, user, correlationId = null }) => {
     const { track } = await requireEditableTrackAccess({ trackId, user, correlationId });
 
@@ -1528,6 +1572,7 @@ export const createTrackService = ({ db, audit, datasetService }) => {
     ingestKeyHeaderName,
     getTrackDetail,
     createLiveTrack,
+    updateTrack,
     deleteTrack,
     updateTrackReading,
     restoreTrackOriginal,

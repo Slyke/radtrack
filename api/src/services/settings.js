@@ -26,7 +26,11 @@ export const createSettingsService = ({ db, runtimeConfig }) => {
         await client.query(
           `INSERT INTO app_settings (key_name, value_json, source, updated_at)
            VALUES ($1, $2::jsonb, $3, $4)
-           ON CONFLICT (key_name) DO NOTHING`,
+           ON CONFLICT (key_name) DO UPDATE
+           SET value_json = EXCLUDED.value_json,
+               source = EXCLUDED.source,
+               updated_at = EXCLUDED.updated_at
+           WHERE app_settings.source = 'bootstrap_seed'`,
           [key, JSON.stringify(value), 'bootstrap_seed', now]
         );
       }

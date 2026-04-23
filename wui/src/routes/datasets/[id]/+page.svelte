@@ -6,8 +6,10 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import ExcludeAreaEditorMap from '$lib/components/ExcludeAreaEditorMap.svelte';
-  import { apiFetch } from '$lib/api/client';
+  import { ApiError, apiFetch } from '$lib/api/client';
+  import { getDefaultSupportedFields, mergePopupFields } from '$lib/datalog-fields';
   import { localeStore, translateMessage } from '$lib/i18n';
+  import { loadMapFieldOrder, orderMapFields, type MapFieldOrder } from '$lib/map-field-visibility';
   import { sessionStore } from '$lib/stores/session';
 
   type Coordinate = {
@@ -16,8 +18,10 @@
   };
 
   let dataset = $state<any>(null);
+  let mapFieldOrder = $state<MapFieldOrder>([]);
   let shareTargets = $state<any[]>([]);
   let errorMessage = $state<string | null>(null);
+  let liveTrackFormError = $state<string | null>(null);
   let shareForm = $state({
     targetUserId: '',
     accessLevel: 'view'
@@ -25,6 +29,7 @@
   let liveTrackForm = $state({
     name: ''
   });
+  let liveTrackNameInput = $state<HTMLInputElement | null>(null);
   let excludeAreaForm = $state({
     label: '',
     applyByDefaultOnExport: false,
@@ -71,9 +76,110 @@
     messages: $localeStore.messages
   });
 
+  const formatFieldType = ({
+    source,
+    valueType
+  }: {
+    source: 'core' | 'measurement' | 'synthetic';
+    valueType: 'number' | 'time' | 'string';
+  }) => {
+    if (source === 'synthetic') {
+      return t('radtrack-datasets_field_inventory_popup_only-label');
+    }
+
+    switch (valueType) {
+      case 'time':
+        return t('radtrack-common_time-label');
+      case 'number':
+      default:
+        return t('radtrack-datasets_field_inventory_number-label');
+    }
+  };
+
+  const datasetFieldInventory = $derived.by(() => {
+    const byPropKey = new Map<string, {
+      propKey: string;
+      source: 'core' | 'measurement' | 'synthetic';
+      valueType: 'number' | 'time' | 'string';
+      displayNames: Set<string>;
+      datalogs: Array<{
+        id: string;
+        name: string | null;
+        displayName: string;
+      }>;
+    }>();
+
+    for (const datalog of dataset?.datalogs ?? []) {
+      for (const field of mergePopupFields(datalog.supportedFields ?? [])) {
+        const current: {
+          propKey: string;
+          source: 'core' | 'measurement' | 'synthetic';
+          valueType: 'number' | 'time' | 'string';
+          displayNames: Set<string>;
+          datalogs: Array<{
+            id: string;
+            name: string | null;
+            displayName: string;
+          }>;
+        } = byPropKey.get(field.propKey) ?? {
+          propKey: field.propKey,
+          source: field.source,
+          valueType: field.valueType,
+          displayNames: new Set<string>(),
+          datalogs: []
+        };
+
+        current.displayNames.add(field.displayName);
+        current.datalogs.push({
+          id: datalog.id,
+          name: datalog.datalogName ?? null,
+          displayName: field.displayName
+        });
+        byPropKey.set(field.propKey, current);
+      }
+    }
+
+    return orderMapFields({
+      fields: [...byPropKey.values()]
+        .map((entry) => ({
+          propKey: entry.propKey,
+          source: entry.source,
+          valueType: entry.valueType,
+          displayNames: [...entry.displayNames].sort((left, right) => left.localeCompare(right)),
+          datalogs: entry.datalogs.sort((left, right) => (
+            String(left.name ?? '').localeCompare(String(right.name ?? ''))
+            || left.id.localeCompare(right.id)
+          ))
+        }))
+        .sort((left, right) => left.propKey.localeCompare(right.propKey)),
+      order: mapFieldOrder
+    });
+  });
+
   const trackSourceLabel = (sourceType: string) => t('radtrack-track_source_type-label', {
     type: t(`radtrack-track_source_type-${sourceType}`)
   });
+
+  const trimLiveTrackName = () => {
+    const trimmedName = liveTrackForm.name.trim();
+    if (trimmedName !== liveTrackForm.name) {
+      liveTrackForm = {
+        ...liveTrackForm,
+        name: trimmedName
+      };
+    }
+
+    return trimmedName;
+  };
+
+  const focusLiveTrackName = () => {
+    if (!browser) {
+      return;
+    }
+
+    liveTrackNameInput?.scrollIntoView({ block: 'center' });
+    liveTrackNameInput?.focus();
+  };
 
   const loadDetail = async () => {
     try {
@@ -94,11 +200,27 @@
       return;
     }
 
+    const trimmedName = trimLiveTrackName();
+    if (!trimmedName) {
+      liveTrackFormError = t('radtrack-dataset_live_track_name_required');
+      focusLiveTrackName();
+      return;
+    }
+
     try {
+      liveTrackFormError = null;
       await apiFetch({
-        path: `/api/datasets/${datasetId}/live-tracks`,
+        path: `/api/datasets/${datasetId}/live-datalogs`,
         method: 'POST',
-        body: liveTrackForm,
+        body: {
+          name: trimmedName,
+          supportedFields: getDefaultSupportedFields().map((field) => ({
+            propKey: field.propKey,
+            displayName: field.displayName,
+            valueType: field.valueType,
+            popupDefaultEnabled: field.popupDefaultEnabled
+          }))
+        },
         csrf: $sessionStore.csrf
       });
       liveTrackForm = {
@@ -106,6 +228,12 @@
       };
       await loadDetail();
     } catch (error) {
+      if (error instanceof ApiError && error.status === 400) {
+        liveTrackFormError = error.message;
+        focusLiveTrackName();
+        return;
+      }
+
       errorMessage = error instanceof Error ? error.message : t('radtrack-dataset_live_track_failed');
     }
   };
@@ -253,7 +381,7 @@
 
     try {
       await apiFetch({
-        path: `/api/tracks/${trackId}`,
+        path: `/api/datalogs/${trackId}`,
         method: 'DELETE',
         csrf: $sessionStore.csrf
       });
@@ -284,7 +412,12 @@
     }
   };
 
-  onMount(loadDetail);
+  onMount(async () => {
+    mapFieldOrder = loadMapFieldOrder({
+      userId: $sessionStore.user?.id ?? null
+    });
+    await loadDetail();
+  });
 </script>
 
 {#if errorMessage}
@@ -296,26 +429,28 @@
     <p class="muted">{t('radtrack-common_loading_dataset')}</p>
   </section>
 {:else}
-  <div class="page-header">
-    <div>
+  <div class="detail-page-header">
+    <div class="page-header">
       <h1>{dataset.name}</h1>
-      <p class="muted">{dataset.description || t('radtrack-common_no-description')}</p>
+      <div class="actions">
+        <a class="button-link" href="/datasets">{t('radtrack-common_back-button')}</a>
+      </div>
     </div>
-    <div class="chip-row">
-      <span class="chip start">{dataset.accessLevel}</span>
-      <a class="button-link" href="/map">{t('radtrack-dataset_detail_open_map-button')}</a>
-      {#if dataset.accessLevel === 'edit'}
-        <button class="danger" onclick={deleteDataset}>{t('radtrack-common_danger-delete-button')}</button>
-      {/if}
+    <div class="page-header detail-page-header-meta-row">
+      <p class="muted detail-page-header-description">{dataset.description || t('radtrack-common_no-description')}</p>
+      <div class="actions">
+        <span class="chip start">{dataset.accessLevel}</span>
+        <a class="button-link" href="/map">{t('radtrack-dataset_detail_open_map-button')}</a>
+        {#if dataset.accessLevel === 'edit'}
+          <button class="danger" onclick={deleteDataset}>{t('radtrack-common_danger-delete-button')}</button>
+        {/if}
+      </div>
     </div>
   </div>
 
   <section class="panel">
     <div class="page-header">
       <h2>{t('radtrack-common_tracks-label')}</h2>
-      {#if dataset.accessLevel === 'edit'}
-        <a class="button-link" href="#live-track-form">{t('radtrack-dataset_live_track_create-button')}</a>
-      {/if}
     </div>
     <div class="table-wrap">
       <table>
@@ -332,18 +467,18 @@
           </tr>
         </thead>
         <tbody>
-          {#if !dataset.tracks.length}
+          {#if !dataset.datalogs.length}
             <tr>
               <td colspan={dataset.accessLevel === 'edit' ? 6 : 5} class="muted">{t('radtrack-dataset_tracks_empty')}</td>
             </tr>
           {:else}
-            {#each dataset.tracks as track}
+            {#each dataset.datalogs as track}
               <tr>
                 <td>
                   <div class="form-grid">
-                    <a href={`/tracks/${track.id}`}>{track.trackName}</a>
-                    {#if track.sourceType === 'live' && track.ingestTrackId}
-                      <code>{track.ingestTrackId}</code>
+                    <a href={`/datalogs/${track.id}`}>{track.datalogName}</a>
+                    {#if track.sourceType === 'live' && track.ingestDatalogId}
+                      <code>{track.ingestDatalogId}</code>
                     {/if}
                   </div>
                 </td>
@@ -354,10 +489,10 @@
                 {#if dataset.accessLevel === 'edit'}
                   <td>
                     <div class="actions">
-                      <a class="button-link" href={`/tracks/${track.id}`}>{t('radtrack-common_edit-label')}</a>
+                      <a class="button-link" href={`/datalogs/${track.id}`}>{t('radtrack-common_edit-label')}</a>
                       <button
                         class="danger"
-                        onclick={() => deleteTrack({ trackId: track.id, trackName: track.trackName })}
+                        onclick={() => deleteTrack({ trackId: track.id, trackName: track.datalogName })}
                       >
                         {t('radtrack-common_danger-delete-button')}
                       </button>
@@ -372,14 +507,84 @@
     </div>
 
     {#if dataset.accessLevel === 'edit'}
-      <div class="form-grid" id="live-track-form">
-        <h3>{t('radtrack-dataset_live_track_create-title')}</h3>
-        <p class="muted">{t('radtrack-dataset_live_track_description')}</p>
-        <input bind:value={liveTrackForm.name} placeholder={t('radtrack-dataset_live_track_name-placeholder')} />
-        <div class="actions">
-          <button class="primary" onclick={createLiveTrack}>{t('radtrack-dataset_live_track_create-button')}</button>
+      <form
+        class="form-grid"
+        id="live-track-create-form"
+        onsubmit={(event) => {
+          event.preventDefault();
+          createLiveTrack();
+        }}
+      >
+        <div class="form-grid" id="live-track-form">
+          <h3>{t('radtrack-dataset_live_track_create-title')}</h3>
+          <p class="muted">{t('radtrack-dataset_live_track_description')}</p>
+          <input
+            aria-describedby={liveTrackFormError ? 'live-track-form-error' : undefined}
+            aria-invalid={Boolean(liveTrackFormError)}
+            bind:this={liveTrackNameInput}
+            bind:value={liveTrackForm.name}
+            onblur={trimLiveTrackName}
+            oninput={() => {
+              liveTrackFormError = null;
+            }}
+            placeholder={t('radtrack-dataset_live_track_name-placeholder')}
+          />
+          {#if liveTrackFormError}
+            <p class="field-error" id="live-track-form-error">{liveTrackFormError}</p>
+          {/if}
+          <div class="actions">
+            <button class="primary" type="submit">{t('radtrack-dataset_live_track_create-button')}</button>
+          </div>
         </div>
+      </form>
+    {/if}
+  </section>
+
+  <section class="panel">
+    <h2>{t('radtrack-dataset_field_inventory-title')}</h2>
+    <p class="muted">{t('radtrack-dataset_field_inventory-description')}</p>
+
+    {#if datasetFieldInventory.length}
+      <div class="field-inventory-accordion-list">
+        {#each datasetFieldInventory as field}
+          <details class="field-inventory-accordion">
+            <summary>
+              <span class="field-inventory-summary">
+                <code>{field.propKey}</code>
+                <span>{field.displayNames.join(', ')}</span>
+              </span>
+              <span class="exclude-editor-summary">
+                <span class="chip subtle">{formatFieldType({ source: field.source, valueType: field.valueType })}</span>
+                <span class="chip subtle">{field.datalogs.length} {t('radtrack-common_tracks-label')}</span>
+                <span aria-hidden="true" class="exclude-editor-icon"></span>
+              </span>
+            </summary>
+
+            <div class="field-inventory-accordion-body">
+              <details class="field-inventory-datalog-accordion">
+                <summary>
+                  <span>{t('radtrack-common_tracks-label')}</span>
+                  <span class="exclude-editor-summary">
+                    <span class="chip subtle">{field.datalogs.length}</span>
+                    <span aria-hidden="true" class="exclude-editor-icon"></span>
+                  </span>
+                </summary>
+
+                <div class="field-inventory-datalog-list">
+                  {#each field.datalogs as datalog}
+                    <div class="field-inventory-datalog">
+                      <a href={`/datalogs/${datalog.id}`}>{datalog.name ?? datalog.id}</a>
+                      <span class="muted">{datalog.displayName}</span>
+                    </div>
+                  {/each}
+                </div>
+              </details>
+            </div>
+          </details>
+        {/each}
       </div>
+    {:else}
+      <p class="muted">{t('radtrack-dataset_field_inventory-empty')}</p>
     {/if}
   </section>
 
@@ -585,13 +790,17 @@
 
 <style>
   .sharing-accordion,
-  .exclude-editor-accordion {
+  .exclude-editor-accordion,
+  .field-inventory-accordion,
+  .field-inventory-datalog-accordion {
     display: grid;
     gap: var(--space-4);
   }
 
   .sharing-accordion summary,
-  .exclude-editor-accordion summary {
+  .exclude-editor-accordion summary,
+  .field-inventory-accordion summary,
+  .field-inventory-datalog-accordion summary {
     list-style: none;
     display: flex;
     align-items: center;
@@ -605,13 +814,52 @@
   }
 
   .sharing-accordion summary::-webkit-details-marker,
-  .exclude-editor-accordion summary::-webkit-details-marker {
+  .exclude-editor-accordion summary::-webkit-details-marker,
+  .field-inventory-accordion summary::-webkit-details-marker,
+  .field-inventory-datalog-accordion summary::-webkit-details-marker {
     display: none;
   }
 
   .sharing-accordion[open] summary,
-  .exclude-editor-accordion[open] summary {
+  .exclude-editor-accordion[open] summary,
+  .field-inventory-accordion[open] summary,
+  .field-inventory-datalog-accordion[open] summary {
     margin-bottom: var(--space-3);
+  }
+
+  .field-inventory-accordion-list {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .field-inventory-summary {
+    display: grid;
+    gap: 0.3rem;
+    min-width: 0;
+  }
+
+  .field-inventory-summary span,
+  .field-inventory-datalog {
+    overflow-wrap: anywhere;
+  }
+
+  .field-inventory-accordion-body {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .field-inventory-datalog-list {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .field-inventory-datalog {
+    display: grid;
+    gap: 0.25rem;
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel-strong);
   }
 
   .sharing-controls {
@@ -632,7 +880,9 @@
     transition: transform var(--transition), color var(--transition);
   }
 
-  .exclude-editor-accordion[open] .exclude-editor-icon::before {
+  .exclude-editor-accordion[open] .exclude-editor-icon::before,
+  .field-inventory-accordion[open] .exclude-editor-icon::before,
+  .field-inventory-datalog-accordion[open] .exclude-editor-icon::before {
     transform: rotate(90deg);
     color: var(--color-text);
   }

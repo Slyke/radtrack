@@ -1,17 +1,104 @@
 import { createAppError } from '../lib/errors.js';
+import {
+  getCoreMetricColumn,
+  isSyntheticPopupField,
+  normalizePropKey,
+  normalizeSupportedFields
+} from '../utils/datalog-fields.js';
 import { sha256Hex } from '../utils/ids.js';
 import { buildAggregateCell, computeAggregateStats, pointInCircle, pointInPolygon } from '../utils/geo.js';
 
-const allowedMetrics = ['dose_rate', 'count_rate', 'accuracy'];
-const aggregatePopupMetrics = [
-  { key: 'doseRate', column: 'dose_rate' },
-  { key: 'countRate', column: 'count_rate' },
-  { key: 'accuracy', column: 'accuracy' },
-  { key: 'temperatureC', column: 'temperature_c' }
-];
 const worldWidthDegrees = 360;
 const canonicalMinLongitude = -180;
 const canonicalMaxLongitude = 180;
+
+const normalizeMetricKey = ({ value, fallback = 'doseRate' }) => normalizePropKey({ value }) ?? fallback;
+
+const toTimestampMillis = ({ value }) => {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.getTime();
+};
+
+const getRowMetricValue = ({ row, metricKey }) => {
+  if (metricKey === 'occurredAt') {
+    return toTimestampMillis({ value: row.occurred_at ?? row.received_at });
+  }
+
+  const coreColumn = getCoreMetricColumn({ propKey: metricKey });
+  if (coreColumn) {
+    return row[coreColumn];
+  }
+
+  return row.measurements_json?.[metricKey] ?? null;
+};
+
+const coercePopupValueString = ({ value }) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    return value.trim() || null;
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+
+  return null;
+};
+
+const resolveExtraFieldValue = ({ extraJson, propKey }) => {
+  if (!extraJson || typeof extraJson !== 'object' || Array.isArray(extraJson)) {
+    return null;
+  }
+
+  if (propKey in extraJson) {
+    return coercePopupValueString({ value: extraJson[propKey] });
+  }
+
+  for (const [rawKey, rawValue] of Object.entries(extraJson)) {
+    if (normalizePropKey({ value: rawKey }) === propKey) {
+      return coercePopupValueString({ value: rawValue });
+    }
+  }
+
+  return null;
+};
+
+const getRowPopupDataValue = ({ row, propKey }) => {
+  switch (propKey) {
+    case 'deviceId':
+      return coercePopupValueString({ value: row.device_id });
+    case 'deviceName':
+      return coercePopupValueString({ value: row.device_name });
+    case 'deviceType':
+      return coercePopupValueString({ value: row.device_type });
+    case 'deviceCalibration':
+      return coercePopupValueString({ value: row.device_calibration });
+    case 'firmwareVersion':
+      return coercePopupValueString({ value: row.firmware_version });
+    case 'sourceReadingId':
+      return coercePopupValueString({ value: row.source_reading_id });
+    case 'comment':
+      return coercePopupValueString({ value: row.comment });
+    case 'custom':
+      return coercePopupValueString({ value: row.custom_text });
+    case 'rawTimestamp':
+      return coercePopupValueString({ value: row.raw_timestamp });
+    case 'parsedTimeText':
+      return coercePopupValueString({ value: row.parsed_time_text });
+    default:
+      return resolveExtraFieldValue({
+        extraJson: row.extra_json,
+        propKey
+      });
+  }
+};
 
 const coerceNumber = ({ value }) => {
   if (value === undefined || value === null || value === '') {
@@ -47,15 +134,15 @@ const toStringArray = ({ value }) => {
 };
 
 const normalizeFilterInput = ({ input }) => ({
-  datasetIds: toStringArray({ value: input?.datasetIds }),
-  combinedDatasetIds: toStringArray({ value: input?.combinedDatasetIds }),
-  trackIds: toStringArray({ value: input?.trackIds }),
-  trackSelectionMode: ['all', 'include', 'none'].includes(String(input?.trackSelectionMode))
-    ? String(input.trackSelectionMode)
+  datasetIds: toStringArray({ value: input?.datasetIds }).sort(),
+  combinedDatasetIds: toStringArray({ value: input?.combinedDatasetIds }).sort(),
+  datalogIds: toStringArray({ value: input?.datalogIds }).sort(),
+  datalogSelectionMode: ['all', 'include', 'none'].includes(String(input?.datalogSelectionMode))
+    ? String(input.datalogSelectionMode)
     : 'all',
   dateFrom: input?.dateFrom ? String(input.dateFrom) : null,
   dateTo: input?.dateTo ? String(input.dateTo) : null,
-  metric: allowedMetrics.includes(String(input?.metric)) ? String(input.metric) : 'dose_rate',
+  metric: normalizeMetricKey({ value: input?.metric }),
   metricMin: coerceNumber({ value: input?.metricMin }),
   metricMax: coerceNumber({ value: input?.metricMax }),
   minLat: coerceNumber({ value: input?.minLat }),
@@ -70,6 +157,8 @@ const normalizeFilterInput = ({ input }) => ({
   zoom: coerceNumber({ value: input?.zoom }),
   modeBucketDecimals: coerceNumber({ value: input?.modeBucketDecimals }) ?? null
 });
+
+const roundCacheCoordinate = ({ value }) => Number(Number(value).toFixed(4));
 
 const withoutViewportFilter = ({ filter }) => ({
   ...filter,
@@ -170,10 +259,10 @@ const buildAggregateCacheViewport = ({ filter }) => {
   const snappedMinLon = Math.floor(cacheMinLon / lonAnchorStep) * lonAnchorStep;
 
   return {
-    minLat: snappedMinLat,
-    maxLat: snappedMinLat + latWindowSpan,
-    minLon: snappedMinLon,
-    maxLon: snappedMinLon + lonWindowSpan
+    minLat: roundCacheCoordinate({ value: snappedMinLat }),
+    maxLat: roundCacheCoordinate({ value: snappedMinLat + latWindowSpan }),
+    minLon: roundCacheCoordinate({ value: snappedMinLon }),
+    maxLon: roundCacheCoordinate({ value: snappedMinLon + lonWindowSpan })
   };
 };
 
@@ -217,7 +306,211 @@ const clipAggregateCellsToViewport = ({
   });
 };
 
+const aggregateCellCacheVersion = 'v2';
+const aggregateCellInvalidationDefaultSizes = [20, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 15000, 20000];
+
+const buildAggregateCellCacheScopeHash = ({
+  datasetIds,
+  filter,
+  cellSizeMeters,
+  modeBucketDecimals
+}) => sha256Hex({
+  value: JSON.stringify({
+    datasetIds,
+    filter: {
+      ...withoutViewportFilter({ filter }),
+      cellSizeMeters,
+      modeBucketDecimals
+    }
+  })
+});
+
+const buildAggregateCellCacheKey = ({
+  userId,
+  scopeHash,
+  shape,
+  cellSizeMeters,
+  cellId,
+  cacheKeyDatasets
+}) => (
+  `aggregate-cell:${aggregateCellCacheVersion}:user=${userId}`
+  + `:scope=${scopeHash}`
+  + `:shape=${shape}`
+  + `:size=${cellSizeMeters}`
+  + `:cell=${cellId}`
+  + `:datasets=${cacheKeyDatasets}`
+);
+
+const stripAggregateCellCacheInfo = ({ cell }) => {
+  const { cache: _cache, ...rest } = cell;
+  return rest;
+};
+
+const buildAggregateCellPayload = ({
+  cell,
+  rows,
+  selectedMetric,
+  popupStringFieldKeys,
+  modeBucketDecimals
+}) => {
+  const metricValues = [];
+  const popupMetricValues = {};
+  const popupDataValues = {};
+  let timeRangeStart = null;
+  let timeRangeEnd = null;
+
+  for (const row of rows) {
+    const metricValue = getRowMetricValue({
+      row,
+      metricKey: selectedMetric
+    });
+    if (metricValue !== null && metricValue !== undefined) {
+      metricValues.push(metricValue);
+    }
+
+    const popupMetrics = {
+      occurredAt: toTimestampMillis({ value: row.occurred_at ?? row.received_at }),
+      latitude: row.latitude,
+      longitude: row.longitude,
+      altitudeMeters: row.altitude_meters,
+      accuracy: row.accuracy,
+      ...(row.measurements_json ?? {})
+    };
+    for (const [metricKey, popupValue] of Object.entries(popupMetrics)) {
+      if (popupValue === null || popupValue === undefined) {
+        continue;
+      }
+
+      const values = popupMetricValues[metricKey] ?? [];
+      values.push(popupValue);
+      popupMetricValues[metricKey] = values;
+    }
+
+    for (const propKey of popupStringFieldKeys) {
+      const popupValue = getRowPopupDataValue({ row, propKey });
+      if (popupValue === null || popupValue === undefined) {
+        continue;
+      }
+
+      const values = popupDataValues[propKey] ?? [];
+      values.push(popupValue);
+      popupDataValues[propKey] = values;
+    }
+
+    const timeValue = row.occurred_at ?? row.received_at;
+    if (timeValue) {
+      if (!timeRangeStart || timeValue < timeRangeStart) {
+        timeRangeStart = timeValue;
+      }
+
+      if (!timeRangeEnd || timeValue > timeRangeEnd) {
+        timeRangeEnd = timeValue;
+      }
+    }
+  }
+
+  return {
+    id: cell.id,
+    center: cell.center,
+    radiusMeters: cell.radiusMeters,
+    pointCount: rows.length,
+    timeRange: {
+      start: timeRangeStart,
+      end: timeRangeEnd
+    },
+    stats: computeAggregateStats({
+      values: metricValues,
+      modeBucketDecimals
+    }),
+    metrics: Object.fromEntries(
+      Object.entries(popupMetricValues).map(([metricKey, values]) => [
+        metricKey,
+        computeAggregateStats({
+          values,
+          modeBucketDecimals
+        })
+      ])
+    ),
+    dataValues: Object.fromEntries(
+      Object.entries(popupDataValues).map(([propKey, values]) => [
+        propKey,
+        [...new Set(values)]
+      ])
+    )
+  };
+};
+
 export const createQueryService = ({ db, cache, settingsService, datasetService }) => {
+  const buildAggregateCellCacheContext = ({
+    user,
+    datasetIds,
+    filter,
+    cellSizeMeters,
+    modeBucketDecimals
+  }) => {
+    const cacheKeyDatasets = datasetIds.slice().sort().join(',') || 'none';
+    const scopeHash = buildAggregateCellCacheScopeHash({
+      datasetIds,
+      filter,
+      cellSizeMeters,
+      modeBucketDecimals
+    });
+
+    return {
+      cacheKeyDatasets,
+      scopeHash,
+      buildKey: ({ cellId }) => buildAggregateCellCacheKey({
+        userId: user.id,
+        scopeHash,
+        shape: filter.shape,
+        cellSizeMeters,
+        cellId,
+        cacheKeyDatasets
+      })
+    };
+  };
+
+  const resolveAggregateCellWithCacheInfo = async ({
+    baseCell,
+    cellCacheKey,
+    ttlSeconds,
+    sourceOnWrite
+  }) => {
+    const cachedCell = await cache.readJson({
+      key: cellCacheKey,
+      ttlSeconds,
+      includeMeta: true
+    });
+    if (cachedCell) {
+      return {
+        ...cachedCell.value,
+        cache: {
+          hit: true,
+          key: cellCacheKey,
+          source: 'cache',
+          ttlSecondsRemaining: cachedCell.ttlSecondsRemaining
+        }
+      };
+    }
+
+    await cache.writeJson({
+      key: cellCacheKey,
+      value: baseCell,
+      ttlSeconds
+    });
+    const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cellCacheKey });
+
+    return {
+      ...baseCell,
+      cache: {
+        hit: sourceOnWrite === 'cache',
+        key: cellCacheKey,
+        source: sourceOnWrite,
+        ttlSecondsRemaining
+      }
+    };
+  };
+
   const resolveDatasetIds = async ({ user, filter, correlationId = null }) => {
     const explicitDatasetIds = new Set(filter.datasetIds);
 
@@ -236,7 +529,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       await datasetService.getDatasetAccess({ datasetId, user, correlationId });
     }
 
-    return [...explicitDatasetIds];
+    return [...explicitDatasetIds].sort();
   };
 
   const loadExcludeAreas = async ({ datasetIds }) => {
@@ -396,8 +689,8 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     }
 
     if (
-      filter.trackSelectionMode === 'none'
-      || (filter.trackSelectionMode === 'include' && !filter.trackIds.length)
+      filter.datalogSelectionMode === 'none'
+      || (filter.datalogSelectionMode === 'include' && !filter.datalogIds.length)
     ) {
       return {
         datasetIds,
@@ -408,7 +701,8 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     }
 
     const params = [datasetIds];
-    const where = ['t.dataset_id = ANY($1::text[])'];
+    const where = ['dlog.dataset_id = ANY($1::text[])'];
+    const joins = ['JOIN datalogs dlog ON dlog.id = r.datalog_id'];
     const longitudeViewport = includeViewport
       ? buildLongitudeViewport({
           minLon: filter.minLon,
@@ -455,28 +749,44 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       }
     }
 
+    const coreMetricColumn = getCoreMetricColumn({ propKey: filter.metric });
+    const metricExpression = filter.metric === 'occurredAt'
+      ? `EXTRACT(EPOCH FROM COALESCE(r.occurred_at, r.received_at)) * 1000.0`
+      : coreMetricColumn
+        ? `r.${coreMetricColumn}`
+      : (() => {
+          params.push(filter.metric);
+          joins.push(
+            `LEFT JOIN reading_numeric_values metric_value
+             ON metric_value.reading_id = r.id
+            AND metric_value.prop_key = $${params.length}`
+          );
+          return 'metric_value.numeric_value';
+        })();
+
     if (filter.metricMin !== null) {
       params.push(filter.metricMin);
-      where.push(`r.${filter.metric} >= $${params.length}`);
+      where.push(`${metricExpression} >= $${params.length}`);
     }
 
     if (filter.metricMax !== null) {
       params.push(filter.metricMax);
-      where.push(`r.${filter.metric} <= $${params.length}`);
+      where.push(`${metricExpression} <= $${params.length}`);
     }
 
-    if (filter.trackSelectionMode === 'include' && filter.trackIds.length) {
-      params.push(filter.trackIds);
-      where.push(`t.id = ANY($${params.length}::text[])`);
+    if (filter.datalogSelectionMode === 'include' && filter.datalogIds.length) {
+      params.push(filter.datalogIds);
+      where.push(`dlog.id = ANY($${params.length}::text[])`);
     }
 
     const result = await db.query(
       `SELECT
          r.id,
-         r.track_id,
-         t.dataset_id,
-         t.source_type,
-         t.track_name,
+         r.datalog_id,
+         dlog.dataset_id,
+         dlog.source_type,
+         dlog.datalog_name,
+         dlog.supported_fields_json,
          r.raw_timestamp,
          r.parsed_time_text,
          r.occurred_at,
@@ -485,12 +795,6 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
          r.longitude,
          r.accuracy,
          r.altitude_meters,
-         r.dose_rate,
-         r.count_rate,
-         r.temperature_c,
-         r.humidity_pct,
-         r.pressure_hpa,
-         r.battery_pct,
          r.device_id,
          r.device_name,
          r.device_type,
@@ -501,9 +805,15 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
          r.custom_text,
          r.row_number,
          r.warning_flags_json,
-         r.extra_json
+         r.extra_json,
+         COALESCE(measurement_map.measurements_json, '{}'::jsonb) AS measurements_json
        FROM readings r
-       JOIN tracks t ON t.id = r.track_id
+       ${joins.join('\n')}
+       LEFT JOIN LATERAL (
+         SELECT jsonb_object_agg(v.prop_key, v.numeric_value) AS measurements_json
+         FROM reading_numeric_values v
+         WHERE v.reading_id = r.id
+       ) measurement_map ON TRUE
        WHERE ${where.join(' AND ')}
        ORDER BY r.occurred_at NULLS LAST, r.row_number ASC`,
       params
@@ -534,9 +844,9 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       points: rows.slice(0, limit).map((row) => ({
         id: row.id,
         datasetId: row.dataset_id,
-        trackId: row.track_id,
+        datalogId: row.datalog_id,
         sourceType: row.source_type,
-        trackName: row.track_name,
+        datalogName: row.datalog_name,
         rawTimestamp: row.raw_timestamp,
         parsedTimeText: row.parsed_time_text,
         occurredAt: row.occurred_at,
@@ -545,12 +855,6 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         longitude: row.longitude,
         accuracy: row.accuracy,
         altitudeMeters: row.altitude_meters,
-        doseRate: row.dose_rate,
-        countRate: row.count_rate,
-        temperatureC: row.temperature_c,
-        humidityPct: row.humidity_pct,
-        pressureHpa: row.pressure_hpa,
-        batteryPct: row.battery_pct,
         deviceId: row.device_id,
         deviceName: row.device_name,
         deviceType: row.device_type,
@@ -561,6 +865,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         custom: row.custom_text,
         rowNumber: row.row_number,
         warningFlags: row.warning_flags_json,
+        measurements: row.measurements_json ?? {},
         extra: row.extra_json
       }))
     };
@@ -594,8 +899,15 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     const cellSizeMeters = filter.cellSizeMeters ?? uiConfig.defaultCellSizeMeters;
     const modeBucketDecimals = filter.modeBucketDecimals ?? uiConfig.modeBucketDecimals;
     const ttlSeconds = uiConfig.cacheTtlSeconds;
-    const cacheKeyPrefix = `aggregate-cells:datasets=${datasetIds.slice().sort().join(',') || 'none'}`;
-    const cacheKey = `${cacheKeyPrefix}:query=${sha256Hex({
+    const cacheKeyDatasets = datasetIds.slice().sort().join(',') || 'none';
+    const cellCacheContext = buildAggregateCellCacheContext({
+      user,
+      datasetIds,
+      filter,
+      cellSizeMeters,
+      modeBucketDecimals
+    });
+    const cacheQueryHash = sha256Hex({
       value: JSON.stringify({
         datasetIds,
         filter: {
@@ -604,19 +916,33 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
           modeBucketDecimals
         }
       })
-    })}`;
+    });
+    const cacheKey = `aggregate-cells:user=${user.id}:query=${cacheQueryHash}:datasets=${cacheKeyDatasets}`;
 
-    const cached = await cache.readJson({ key: cacheKey, ttlSeconds });
+    const cached = await cache.readJson({
+      key: cacheKey,
+      ttlSeconds,
+      includeMeta: true
+    });
     if (cached) {
+      const visibleCells = clipAggregateCellsToViewport({
+        cells: cached.value.cells,
+        viewport: viewportFilter
+      });
+
       return {
-        ...cached,
-        cells: clipAggregateCellsToViewport({
-          cells: cached.cells,
-          viewport: viewportFilter
-        }),
+        ...cached.value,
+        cells: await Promise.all(visibleCells.map((cell) => resolveAggregateCellWithCacheInfo({
+          baseCell: cell,
+          cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
+          ttlSeconds,
+          sourceOnWrite: 'cache'
+        }))),
         cache: {
           hit: true,
-          key: cacheKey
+          key: cacheKey,
+          source: 'cache',
+          ttlSecondsRemaining: cached.ttlSecondsRemaining
         }
       };
     }
@@ -630,16 +956,25 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         cells: []
       };
       await cache.writeJson({ key: cacheKey, value: empty, ttlSeconds });
+      const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
       return {
         ...empty,
         cache: {
           hit: false,
-          key: cacheKey
+          key: cacheKey,
+          source: 'computed',
+          ttlSecondsRemaining
         }
       };
     }
 
-    const cells = new Map();
+    const popupStringFieldKeys = [...new Set(
+      rows.flatMap((row) => normalizeSupportedFields({ value: row.supported_fields_json })
+        .filter((field) => field.valueType === 'string' && !isSyntheticPopupField({ propKey: field.propKey }))
+        .map((field) => field.propKey))
+    )];
+
+    const cellGroups = new Map();
     for (const row of rows) {
       const cell = buildAggregateCell({
         point: {
@@ -649,101 +984,55 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         shape: cacheableFilter.shape,
         cellSizeMeters
       });
-      const current = cells.get(cell.id) ?? {
-        id: cell.id,
-        center: cell.center,
-        radiusMeters: cell.radiusMeters,
-        metricValues: [],
-        pointCount: 0,
-        timeRangeStart: null,
-        timeRangeEnd: null,
-        popupMetricValues: {
-          doseRate: [],
-          countRate: [],
-          accuracy: [],
-          temperatureC: []
-        }
+      const current = cellGroups.get(cell.id) ?? {
+        cell,
+        rows: []
       };
 
-      const metricValue = row[filter.metric];
-      if (metricValue !== null && metricValue !== undefined) {
-        current.metricValues.push(metricValue);
-      }
-
-      current.pointCount += 1;
-
-      for (const popupMetric of aggregatePopupMetrics) {
-        const popupValue = row[popupMetric.column];
-        if (popupValue === null || popupValue === undefined) {
-          continue;
-        }
-
-        current.popupMetricValues[popupMetric.key].push(popupValue);
-      }
-
-      const timeValue = row.occurred_at ?? row.received_at;
-      if (timeValue) {
-        if (!current.timeRangeStart || timeValue < current.timeRangeStart) {
-          current.timeRangeStart = timeValue;
-        }
-
-        if (!current.timeRangeEnd || timeValue > current.timeRangeEnd) {
-          current.timeRangeEnd = timeValue;
-        }
-      }
-
-      cells.set(cell.id, current);
+      current.rows.push(row);
+      cellGroups.set(cell.id, current);
     }
+
+    const resolvedCells = await Promise.all(
+      [...cellGroups.values()].map(async ({ cell, rows: cellRows }) => {
+        const baseCell = buildAggregateCellPayload({
+          cell,
+          rows: cellRows,
+          selectedMetric: filter.metric,
+          popupStringFieldKeys,
+          modeBucketDecimals
+        });
+
+        return resolveAggregateCellWithCacheInfo({
+          baseCell,
+          cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
+          ttlSeconds,
+          sourceOnWrite: 'computed'
+        });
+      })
+    );
 
     const fullResponse = {
       datasetIds,
       metric: cacheableFilter.metric,
       shape: cacheableFilter.shape,
       cellSizeMeters,
-      cells: [...cells.values()].map((cell) => ({
-        id: cell.id,
-        center: cell.center,
-        radiusMeters: cell.radiusMeters,
-        pointCount: cell.pointCount,
-        timeRange: {
-          start: cell.timeRangeStart,
-          end: cell.timeRangeEnd
-        },
-        stats: computeAggregateStats({
-          values: cell.metricValues,
-          modeBucketDecimals
-        }),
-        metrics: {
-          doseRate: computeAggregateStats({
-            values: cell.popupMetricValues.doseRate,
-            modeBucketDecimals
-          }),
-          countRate: computeAggregateStats({
-            values: cell.popupMetricValues.countRate,
-            modeBucketDecimals
-          }),
-          accuracy: computeAggregateStats({
-            values: cell.popupMetricValues.accuracy,
-            modeBucketDecimals
-          }),
-          temperatureC: computeAggregateStats({
-            values: cell.popupMetricValues.temperatureC,
-            modeBucketDecimals
-          })
-        }
-      }))
+      cells: resolvedCells.map((cell) => stripAggregateCellCacheInfo({ cell }))
     };
 
     await cache.writeJson({ key: cacheKey, value: fullResponse, ttlSeconds });
+    const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
     return {
       ...fullResponse,
       cells: clipAggregateCellsToViewport({
-        cells: fullResponse.cells,
+        cells: resolvedCells,
         viewport: viewportFilter
       }),
       cache: {
         hit: false,
-        key: cacheKey
+        key: cacheKey,
+        source: 'computed',
+        ttlSecondsRemaining
       }
     };
   };
@@ -752,6 +1041,56 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     for (const datasetId of datasetIds) {
       await cache.deletePattern({ pattern: `aggregate:*${datasetId}*` });
       await cache.deletePattern({ pattern: `aggregate-cells:*${datasetId}*` });
+      await cache.deletePattern({ pattern: `aggregate-cell:${aggregateCellCacheVersion}:*${datasetId}*` });
+    }
+  };
+
+  const invalidateAggregateCellsForPoint = async ({
+    datasetIds,
+    point,
+    cellSizeMetersValues = [],
+    shapes = ['hexagon', 'square', 'circle']
+  }) => {
+    if (!Array.isArray(datasetIds) || !datasetIds.length || !point) {
+      return;
+    }
+
+    const uiConfig = await settingsService.getUiConfig();
+    const normalizedCellSizes = [...new Set(
+      [
+        uiConfig.defaultCellSizeMeters,
+        ...aggregateCellInvalidationDefaultSizes,
+        ...cellSizeMetersValues
+      ]
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value > 0)
+    )].sort((left, right) => left - right);
+    const normalizedShapes = [...new Set(
+      shapes.filter((shape) => ['hexagon', 'square', 'circle'].includes(shape))
+    )];
+
+    for (const datasetId of datasetIds) {
+      await cache.deletePattern({ pattern: `aggregate-cells:*${datasetId}*` });
+    }
+
+    for (const shape of normalizedShapes) {
+      for (const cellSizeMetersValue of normalizedCellSizes) {
+        const cell = buildAggregateCell({
+          point,
+          shape,
+          cellSizeMeters: cellSizeMetersValue
+        });
+
+        for (const datasetId of datasetIds) {
+          await cache.deletePattern({
+            pattern: (
+              `aggregate-cell:${aggregateCellCacheVersion}:*:shape=${shape}`
+              + `:size=${cellSizeMetersValue}`
+              + `:cell=${cell.id}:*${datasetId}*`
+            )
+          });
+        }
+      }
     }
   };
 
@@ -759,6 +1098,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     fetchFilteredRows,
     getRawPoints,
     getAggregates,
-    invalidateDatasets
+    invalidateDatasets,
+    invalidateAggregateCellsForPoint
   };
 };

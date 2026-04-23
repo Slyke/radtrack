@@ -11,9 +11,22 @@ Default deployment runs them separately. Monolith mode lets the API serve the bu
 
 ## Storage Model
 
-- Postgres stores users, auth identities, sessions, audit events, raw uploaded blobs, datasets, shares, tracks, track ingest keys, readings, exclude areas, combined datasets, and runtime settings.
-- Redis stores aggregate query result caches with read-refresh TTL behavior.
+- Postgres stores users, auth identities, sessions, audit events, raw uploaded blobs, datasets, shares, datalogs, datalog ingest keys, readings, exclude areas, combined datasets, and runtime settings.
+- Redis stores aggregate query result caches and per-aggregate-cell caches with normal TTL expiry.
 - Temporary filesystem use is allowed only during request processing and is not relied on for durable storage.
+- Datalog field definitions live on the datalog itself:
+  - `number` and `time` fields are plottable and can also be shown in popups
+  - `string` fields are popup-only and are deduped in aggregate popups
+  - core reading props such as `occurredAt`, `latitude`, `longitude`, `altitudeMeters`, and `accuracy` are only exposed on the map when they are explicitly listed in the datalog field definitions
+  - numeric field values are stored in `reading_numeric_values`
+  - string field values are resolved from reading metadata columns and `extra_json`
+- Reserved synthetic popup-only fields can be added manually in the datalog field editor:
+  - `radtrackDataCount`
+  - `radtrackCacheKey`
+  - `radtrackCacheSource`
+  - `radtrackCacheTtlSeconds`
+  - `radtrackDataCount` controls the aggregate popup badge and shows the number of data points in the clicked cell
+  - on aggregate popups these refer to the specific rendered cell, not the whole viewport query
 
 ## Auth Model
 
@@ -41,11 +54,12 @@ Default deployment runs them separately. Monolith mode lets the API serve the bu
 
 ## Live Ingest Model
 
-- Tracks may also be created as `live` tracks inside existing datasets.
-- Each live track gets a short per-owner ingest id used by `POST /api/ingest/tracks/:ingestTrackId/points`.
-- One live track can have multiple generated API keys, but each key belongs to only one track.
+- Datalogs may also be created as `live` datalogs inside existing datasets.
+- Each live datalog gets a short per-owner ingest id used by `POST /api/ingest/datalogs/:ingestDatalogId/points`.
+- One live datalog can have multiple generated API keys, but each key belongs to only one datalog.
 - API keys are stored hashed, exposed in plaintext only once at creation or rotation time, and can be revoked or rotated independently.
 - Ingested points store both the sender timestamp (`occurredAt`) and the server acceptance timestamp (`receivedAt`).
+- Root-level numeric props are treated as measurements. Root-level non-numeric props are normalized into `extra_json` unless they map to known reading metadata like `deviceId`.
 - Scoped audit events capture ingest key lifecycle actions and rejected ingest attempts.
 
 ## Query Model
@@ -54,6 +68,8 @@ Default deployment runs them separately. Monolith mode lets the API serve the bu
 - Filters support dataset scope, combined dataset scope, viewport, date range, metric ranges, and exclusion application.
 - Aggregate shapes support square, circle, and hex layouts.
 - Aggregate mode computes min, max, mean, median, rounded-bucket mode, and count.
+- Aggregate cells are cached independently from viewport query caches so the same cell can be reused across nearby viewport/hash changes.
+- Future live-point invalidation can target aggregate cells directly through `queryService.invalidateAggregateCellsForPoint(...)`, while still clearing broader viewport caches for affected datasets.
 
 ## Permission Model
 

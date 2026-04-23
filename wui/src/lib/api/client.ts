@@ -170,7 +170,8 @@ export const uploadImport = ({
   splitBulkArchivesIntoDatasets,
   advancedTrackDeduplication,
   csrf,
-  onProgress
+  onProgress,
+  onStageChange
 }: {
   files: File[];
   datasetName: string;
@@ -179,6 +180,7 @@ export const uploadImport = ({
   advancedTrackDeduplication: boolean;
   csrf: SessionPayload['csrf'];
   onProgress?: (percent: number) => void;
+  onStageChange?: (stage: 'uploading' | 'processing') => void;
 }) => new Promise<unknown>((resolve, reject) => {
   const request = new XMLHttpRequest();
   request.open('POST', resolveApiPath({ path: '/api/imports' }));
@@ -188,6 +190,8 @@ export const uploadImport = ({
     request.setRequestHeader(csrf.headerName, csrf.token);
   }
 
+  onStageChange?.('uploading');
+
   request.upload.onprogress = (event) => {
     if (!event.lengthComputable || !onProgress) {
       return;
@@ -195,8 +199,13 @@ export const uploadImport = ({
 
     onProgress(Math.round((event.loaded / event.total) * 100));
   };
+  request.upload.onload = () => {
+    onProgress?.(100);
+    onStageChange?.('processing');
+  };
 
   request.onerror = () => reject(new Error('Upload failed'));
+  request.onabort = () => reject(new Error('Upload cancelled'));
   request.onload = () => {
     try {
       const body = request.responseText ? JSON.parse(request.responseText) : null;

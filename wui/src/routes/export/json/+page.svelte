@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import { humanizePropKey, normalizePropKey } from '$lib/datalog-fields';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
 
@@ -52,7 +53,7 @@
   let form = $state({
     datasetIds: [] as string[],
     combinedDatasetIds: [] as string[],
-    metric: 'dose_rate',
+    metric: 'doseRate',
     includeRaw: true,
     includeAggregates: false,
     applyExcludeAreas: true,
@@ -86,6 +87,15 @@
 
     return t('radtrack-common_hexagon-label');
   };
+
+  const metricSuggestions = [
+    'doseRate',
+    'countRate',
+    'accuracy',
+    'latitude',
+    'longitude',
+    'altitudeMeters'
+  ];
 
   const buildExportFilename = ({ exportTime }: { exportTime: string }) => {
     if (/^\d{4}-\d{2}-\d{2}/.test(exportTime)) {
@@ -313,11 +323,19 @@
           <label class="export-field">
             <span class="muted">{t('radtrack-common_metric-label')}</span>
             <span class="faint export-help">{t('radtrack-export_metric-help')}</span>
-            <select bind:value={form.metric}>
-              <option value="dose_rate">{t('radtrack-common_dose_rate-label')}</option>
-              <option value="count_rate">{t('radtrack-common_count_rate-label')}</option>
-              <option value="accuracy">{t('radtrack-common_accuracy-label')}</option>
-            </select>
+            <input
+              bind:value={form.metric}
+              list="export-metric-options"
+              onblur={() => {
+                form.metric = normalizePropKey(form.metric) ?? form.metric.trim();
+              }}
+              placeholder="doseRate"
+            />
+            <datalist id="export-metric-options">
+              {#each metricSuggestions as metric}
+                <option value={metric}>{humanizePropKey(metric) ?? metric}</option>
+              {/each}
+            </datalist>
           </label>
 
           <div class="form-grid">

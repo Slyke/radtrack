@@ -3,8 +3,27 @@ import path from 'node:path';
 import { AppError } from './errors.js';
 
 const levels = ['debug', 'info', 'warn', 'error'];
-const textTemplateDefault = '[{$timestamp}] {$level} {$caller} {$correlationId} {$errorCode} {$message}{$context}{$kubernetes}';
+const textTemplateDefault = '[{$timestamp}] {$level} {$caller} {$correlationId} {$errorCode} {$message}{$context}{$rootCause}{$kubernetes}';
 const sensitiveKeyPattern = /(password|secret|token|cookie|authorization|apikey|clientsecret|sessionsecret)/i;
+const errorMetadataKeys = [
+  'code',
+  'detail',
+  'hint',
+  'position',
+  'internalPosition',
+  'internalQuery',
+  'where',
+  'schema',
+  'table',
+  'column',
+  'dataType',
+  'constraint',
+  'file',
+  'line',
+  'routine',
+  'severity',
+  'severity_local'
+];
 
 const parseBoolean = ({ value, fallback = false }) => {
   if (value === undefined || value === null || value === '') {
@@ -59,6 +78,30 @@ const stringifySafe = ({ value }) => {
   } catch {
     return String(value);
   }
+};
+
+const serializeError = ({ error }) => {
+  const serialized = {
+    name: error.name,
+    message: error.message,
+    stack: error.stack
+  };
+
+  for (const key of errorMetadataKeys) {
+    if (error[key] !== undefined) {
+      serialized[key] = error[key];
+    }
+  }
+
+  for (const [key, value] of Object.entries(error)) {
+    if (serialized[key] !== undefined) {
+      continue;
+    }
+
+    serialized[key] = value;
+  }
+
+  return redact({ value: serialized });
 };
 
 const resolveKubernetesMetadata = () => {
@@ -119,11 +162,7 @@ export const createLogger = () => {
       errorCode,
       context: context ? redact({ value: context }) : undefined,
       rootCause: rootCause instanceof Error
-        ? {
-            name: rootCause.name,
-            message: rootCause.message,
-            stack: rootCause.stack
-          }
+        ? serializeError({ error: rootCause })
         : (rootCause ? redact({ value: rootCause }) : undefined),
       kubernetes
     };
@@ -146,6 +185,7 @@ export const createLogger = () => {
             errorCode: errorCode ?? '',
             message: typeof message === 'string' ? message : stringifySafe({ value: message }),
             context: event.context ? ` context=${stringifySafe({ value: event.context })}` : '',
+            rootCause: event.rootCause ? ` rootCause=${stringifySafe({ value: event.rootCause })}` : '',
             kubernetes: kubernetes ? ` kubernetes=${stringifySafe({ value: kubernetes })}` : ''
           }
         }).trim();
@@ -169,6 +209,7 @@ export const createLogger = () => {
               errorCode: errorCode ?? '',
               message: typeof message === 'string' ? message : stringifySafe({ value: message }),
               context: event.context ? ` context=${stringifySafe({ value: event.context })}` : '',
+              rootCause: event.rootCause ? ` rootCause=${stringifySafe({ value: event.rootCause })}` : '',
               kubernetes: kubernetes ? ` kubernetes=${stringifySafe({ value: kubernetes })}` : ''
             }
           })}\n`;

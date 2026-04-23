@@ -254,6 +254,12 @@ button:disabled:hover {
   box-shadow: none;
 }
 
+input[aria-invalid='true'],
+select[aria-invalid='true'],
+textarea[aria-invalid='true'] {
+  border-color: var(--color-danger);
+}
+
 .button-link:active,
 .button-link:focus-visible,
 .button-link:hover {
@@ -336,7 +342,7 @@ code {
   position: fixed;
   top: var(--space-5);
   left: var(--space-4);
-  z-index: 40;
+  z-index: 900;
 }
 
 .sidebar {
@@ -394,10 +400,27 @@ code {
   max-width: 96rem;
 }
 
+.content.datasets-content {
+  max-width: none;
+}
+
+.content.datalog-content {
+  max-width: none;
+}
+
+.content.import-export-content {
+  max-width: none;
+}
+
 .content.map-content {
   max-width: none;
+  display: block;
   min-height: 100vh;
   overflow: hidden;
+}
+
+.content.map-content > * {
+  width: 100%;
 }
 
 .content.login-screen {
@@ -453,8 +476,26 @@ code {
   margin: 0;
 }
 
+.detail-page-header {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.detail-page-header-description {
+  margin: 0;
+}
+
+.detail-page-header-meta-row {
+  align-items: center;
+}
+
 .muted {
   color: var(--color-text-muted);
+}
+
+.field-error {
+  margin: 0;
+  color: var(--color-danger);
 }
 
 .faint {
@@ -472,6 +513,12 @@ code {
 
 .grid.cols-3 {
   grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.datasets-page,
+.datasets-page-header {
+  display: grid;
+  gap: var(--space-4);
 }
 
 .panel {
@@ -675,5 +722,32 @@ th {
   .sidebar-toggle-floating {
     top: var(--space-4);
     left: var(--space-4);
+  }
+}
+
+@media (min-width: 1025px) {
+  .datasets-page {
+    height: calc(100dvh - (var(--space-5) * 2));
+    overflow: hidden;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .datasets-layout {
+    min-height: 0;
+    align-items: stretch;
+  }
+
+  .datasets-layout > .panel {
+    min-height: 0;
+  }
+
+  .datasets-list-panel {
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    overflow: hidden;
+  }
+
+  .datasets-list-panel .table-wrap {
+    min-height: 0;
   }
 }

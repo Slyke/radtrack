@@ -5,6 +5,12 @@
   import { sessionStore } from '$lib/stores/session';
   import { uploadImport } from '$lib/api/client';
 
+  type ImportMode = 'json' | 'radiacode';
+
+  interface Props {
+    mode: ImportMode;
+  }
+
   interface ImportWarningEntry {
     rowNumber?: number | null;
     type: string;
@@ -18,13 +24,13 @@
   }
 
   interface ImportChildParseSummary {
-    trackId?: string;
+    datalogId?: string;
     warningCount?: number;
     warningBreakdown?: ImportWarningBreakdownEntry[];
     warnings?: ImportWarningEntry[];
     dedupeMethod?: string | null;
     duplicateOfRawFileId?: string | null;
-    duplicateOfTrackId?: string | null;
+    duplicateOfDatalogId?: string | null;
     skippedParsing?: boolean;
   }
 
@@ -93,28 +99,60 @@
     sourceFileName: string;
     childFileName: string;
     parseStatus: string;
-    trackId: string | null;
+    datalogId: string | null;
     dedupeMethod: string | null;
     duplicateOfRawFileId: string | null;
-    duplicateOfTrackId: string | null;
+    duplicateOfDatalogId: string | null;
     warningCount: number;
     warningBreakdown: ImportWarningBreakdownEntry[];
     rowWarnings: ImportWarningEntry[];
     persisted: boolean;
   }
 
+  type ImportStage = 'idle' | 'uploading' | 'processing';
+
+  interface ImportModeConfig {
+    accept: string;
+    descriptionKey: string;
+    dragDropLabelKey: string;
+    invalidFileTypeKey: string;
+    titleKey: string;
+  }
+
+  const importConfigs: Record<ImportMode, ImportModeConfig> = {
+    json: {
+      accept: '.json,application/json',
+      descriptionKey: 'radtrack-import_json_description',
+      dragDropLabelKey: 'radtrack-import_json_drag_drop-label',
+      invalidFileTypeKey: 'radtrack-import_json_invalid_file_type',
+      titleKey: 'radtrack-import_json_title'
+    },
+    radiacode: {
+      accept: '.rctrk,.zrctrk,.zip',
+      descriptionKey: 'radtrack-import_radiacode_description',
+      dragDropLabelKey: 'radtrack-import_radiacode_drag_drop-label',
+      invalidFileTypeKey: 'radtrack-import_radiacode_invalid_file_type',
+      titleKey: 'radtrack-import_radiacode_title'
+    }
+  };
+
+  let { mode }: Props = $props();
+
   let fileInput: HTMLInputElement | null = null;
   let selectedFiles = $state<File[]>([]);
   let datasetName = $state('');
   let description = $state('');
-  let splitBulkArchivesIntoDatasets = $state(true);
+  let splitBulkArchivesIntoDatasets = $state(false);
   let advancedTrackDeduplication = $state(true);
   let uploadProgress = $state(0);
   let busy = $state(false);
+  let importStage = $state<ImportStage>('idle');
   let dragActive = $state(false);
   let dragDepth = $state(0);
   let result = $state<ImportResult | null>(null);
   let errorMessage = $state<string | null>(null);
+  const config = $derived(importConfigs[mode]);
+  const showSplitBulkArchivesOption = $derived(mode === 'radiacode');
 
   const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
     key,
@@ -122,29 +160,55 @@
     messages: $localeStore.messages
   });
 
+  $effect(() => {
+    splitBulkArchivesIntoDatasets = mode === 'radiacode';
+  });
+
   const isFileDrag = (event: DragEvent) => Array.from(event.dataTransfer?.types ?? []).includes('Files');
+  const isJsonFileName = (fileName: string) => fileName.trim().toLowerCase().endsWith('.json');
   const isSplitArchiveFileName = (fileName: string) => {
     const normalizedFileName = fileName.trim().toLowerCase();
     return normalizedFileName.endsWith('.zrctrk') || normalizedFileName.endsWith('.zip');
   };
+  const isRadiaCodeFileName = (fileName: string) => {
+    const normalizedFileName = fileName.trim().toLowerCase();
+    return normalizedFileName.endsWith('.rctrk') || isSplitArchiveFileName(normalizedFileName);
+  };
+  const isAcceptedFile = (file: File) => (
+    mode === 'json'
+      ? isJsonFileName(file.name)
+      : isRadiaCodeFileName(file.name)
+  );
   const duplicateFileReason = 'File matched an earlier raw artifact and was skipped.';
   const datasetNameDerivedFromBulkFiles = $derived(
-    splitBulkArchivesIntoDatasets
+    showSplitBulkArchivesOption
+    && splitBulkArchivesIntoDatasets
     && selectedFiles.length > 0
     && selectedFiles.every((file) => isSplitArchiveFileName(file.name))
   );
 
   const fileSummary = (files: File[]) => files.map((file) => file.name).join(', ');
+  const getBusyLabel = () => (
+    importStage === 'processing'
+      ? t('radtrack-import_processing-label')
+      : t('radtrack-import_uploading-label')
+  );
+  const getBusyDescription = () => (
+    importStage === 'processing'
+      ? t('radtrack-import_processing-help')
+      : t('radtrack-import_uploading_progress-label', { percent: uploadProgress })
+  );
 
   const syncSelectedFiles = (files: File[]) => {
     selectedFiles = files;
     const nextDatasetNameDerivedFromBulkFiles = (
-      splitBulkArchivesIntoDatasets
+      showSplitBulkArchivesOption
+      && splitBulkArchivesIntoDatasets
       && files.length > 0
       && files.every((file) => isSplitArchiveFileName(file.name))
     );
 
-    if (!datasetName.trim() && files.length && !nextDatasetNameDerivedFromBulkFiles) {
+    if (mode === 'radiacode' && !datasetName.trim() && files.length && !nextDatasetNameDerivedFromBulkFiles) {
       datasetName = files[0].name;
     }
 
@@ -163,7 +227,12 @@
   };
 
   const handleFiles = (files: FileList | null) => {
-    syncSelectedFiles(files ? Array.from(files) : []);
+    const nextFiles = files ? Array.from(files) : [];
+    const acceptedFiles = nextFiles.filter((file) => isAcceptedFile(file));
+    const rejectedFiles = nextFiles.filter((file) => !isAcceptedFile(file));
+
+    syncSelectedFiles(acceptedFiles);
+    errorMessage = rejectedFiles.length ? t(config.invalidFileTypeKey) : null;
   };
 
   const removeSelectedFile = (index: number) => {
@@ -276,10 +345,10 @@
             sourceFileName: file.sourceArchiveFilename ?? file.originalFilename,
             childFileName: child.originalFilename,
             parseStatus: child.parseStatus,
-            trackId: child.summary?.trackId ?? null,
+            datalogId: child.summary?.datalogId ?? null,
             dedupeMethod: child.summary?.dedupeMethod ?? null,
             duplicateOfRawFileId: child.duplicateOfRawFileId ?? child.summary?.duplicateOfRawFileId ?? null,
-            duplicateOfTrackId: child.summary?.duplicateOfTrackId ?? null,
+            duplicateOfDatalogId: child.summary?.duplicateOfDatalogId ?? null,
             warningCount,
             warningBreakdown,
             rowWarnings,
@@ -361,8 +430,8 @@
         `File: ${report.childFileName}`,
         report.sourceFileName !== report.childFileName ? `Source file: ${report.sourceFileName}` : null,
         `Parse status: ${report.parseStatus}`,
-        report.trackId ? `Track: ${report.trackId}` : null,
-        report.duplicateOfTrackId ? `Duplicate of track: ${report.duplicateOfTrackId}` : null,
+        report.datalogId ? `Datalog: ${report.datalogId}` : null,
+        report.duplicateOfDatalogId ? `Duplicate of datalog: ${report.duplicateOfDatalogId}` : null,
         report.duplicateOfRawFileId ? `Duplicate of raw file: ${report.duplicateOfRawFileId}` : null,
         report.dedupeMethod ? `Dedupe method: ${report.dedupeMethod}` : null,
         `Warning count: ${report.warningCount}`,
@@ -441,6 +510,10 @@
   };
 
   const handleDragEnter = (event: DragEvent) => {
+    if (busy) {
+      return;
+    }
+
     if (!isFileDrag(event)) {
       return;
     }
@@ -451,6 +524,10 @@
   };
 
   const handleDragLeave = (event: DragEvent) => {
+    if (busy) {
+      return;
+    }
+
     if (!isFileDrag(event)) {
       return;
     }
@@ -461,6 +538,16 @@
   };
 
   const handleDragOver = (event: DragEvent) => {
+    if (busy) {
+      if (isFileDrag(event)) {
+        event.preventDefault();
+        if (event.dataTransfer) {
+          event.dataTransfer.dropEffect = 'none';
+        }
+      }
+      return;
+    }
+
     if (!isFileDrag(event)) {
       return;
     }
@@ -476,6 +563,13 @@
   };
 
   const handleDrop = (event: DragEvent) => {
+    if (busy) {
+      if (isFileDrag(event)) {
+        event.preventDefault();
+      }
+      return;
+    }
+
     if (!isFileDrag(event)) {
       return;
     }
@@ -492,6 +586,7 @@
     }
 
     busy = true;
+    importStage = 'uploading';
     errorMessage = null;
     result = null;
     uploadProgress = 0;
@@ -500,11 +595,17 @@
         files: selectedFiles,
         datasetName,
         description,
-        splitBulkArchivesIntoDatasets,
+        splitBulkArchivesIntoDatasets: showSplitBulkArchivesOption ? splitBulkArchivesIntoDatasets : false,
         advancedTrackDeduplication,
         csrf: $sessionStore.csrf,
         onProgress: (percent) => {
           uploadProgress = percent;
+        },
+        onStageChange: (stage) => {
+          importStage = stage;
+          if (stage === 'processing') {
+            uploadProgress = 100;
+          }
         }
       }) as ImportResult;
       resetImportForm();
@@ -512,41 +613,46 @@
       errorMessage = error instanceof Error ? error.message : t('radtrack-import_failed');
     } finally {
       busy = false;
+      importStage = 'idle';
     }
   };
 </script>
 
 <div class="page-header">
   <div>
-    <h1>{t('radtrack-import_title')}</h1>
-    <p class="muted">{t('radtrack-import_description')}</p>
+    <h1>{t(config.titleKey)}</h1>
+    <p class="muted">{t(config.descriptionKey)}</p>
   </div>
 </div>
 
-<section class="panel">
+<section aria-busy={busy} class="panel">
   <div class="form-grid">
     <label>
       <div class="muted">{t('radtrack-common_dataset_name-label')}</div>
       <input
         bind:value={datasetName}
-        disabled={datasetNameDerivedFromBulkFiles}
+        disabled={busy || datasetNameDerivedFromBulkFiles}
         placeholder={t('radtrack-import_optional_dataset_name-placeholder')}
       />
-      {#if datasetNameDerivedFromBulkFiles}
+      {#if mode === 'json'}
+        <div class="faint">{t('radtrack-import_json_dataset_name-help')}</div>
+      {:else if datasetNameDerivedFromBulkFiles}
         <div class="faint">{t('radtrack-import_dataset_name_ignored-help')}</div>
       {/if}
     </label>
     <label>
       <div class="muted">{t('radtrack-common_description-label')}</div>
-      <textarea bind:value={description} placeholder={t('radtrack-import_optional_description-placeholder')}></textarea>
+      <textarea bind:value={description} disabled={busy} placeholder={t('radtrack-import_optional_description-placeholder')}></textarea>
     </label>
     {#if !description.trim() && selectedFiles.length}
       <div class="actions">
-        <button class="mid" onclick={autofillDescription} type="button">{t('radtrack-import_autofill_description-button')}</button>
+        <button class="mid" disabled={busy} onclick={autofillDescription} type="button">{t('radtrack-import_autofill_description-button')}</button>
       </div>
     {/if}
     <div
+      aria-disabled={busy}
       class:active={dragActive}
+      class:disabled={busy}
       class="dropzone"
       role="button"
       tabindex="0"
@@ -554,6 +660,10 @@
       ondragleave={handleDragLeave}
       ondragover={handleDragOver}
       onkeydown={(event) => {
+        if (busy) {
+          return;
+        }
+
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           fileInput?.click();
@@ -561,10 +671,11 @@
       }}
       ondrop={handleDrop}
     >
-      <p>{t('radtrack-import_drag_drop-label')}</p>
+      <p>{t(config.dragDropLabelKey)}</p>
       <input
-        accept=".rctrk,.zrctrk,.zip,.json,application/json"
+        accept={config.accept}
         bind:this={fileInput}
+        disabled={busy}
         multiple
         onchange={(event) => handleFiles((event.currentTarget as HTMLInputElement).files)}
         type="file"
@@ -574,25 +685,37 @@
       {#each selectedFiles as file, index}
         <span class="chip start file-chip">
           <span>{file.name}</span>
-          <button class="chip-action" onclick={() => removeSelectedFile(index)} type="button">{t('radtrack-common_remove-button')}</button>
+          <button class="chip-action" disabled={busy} onclick={() => removeSelectedFile(index)} type="button">{t('radtrack-common_remove-button')}</button>
         </span>
       {/each}
     </div>
     {#if busy}
-      <div class="progress"><span style={`width:${uploadProgress}%`}></span></div>
+      <div aria-atomic="true" aria-live="polite" class="import-activity" role="status">
+        <div class="chip-row">
+          <span class={importStage === 'processing' ? 'chip warning' : 'chip mid'}>{getBusyLabel()}</span>
+        </div>
+        <p class="muted">{getBusyDescription()}</p>
+        <div class:processing={importStage === 'processing'} class="progress">
+          <span style={importStage === 'processing' ? undefined : `width:${uploadProgress}%`}></span>
+        </div>
+      </div>
     {/if}
     <div class="actions import-submit-actions">
-      <button class="primary" disabled={!selectedFiles.length || busy} onclick={submit}>{t('radtrack-common_upload-button')}</button>
+      <button class="primary" disabled={!selectedFiles.length || busy} onclick={submit}>
+        {busy ? getBusyLabel() : t('radtrack-common_upload-button')}
+      </button>
       <div class="import-submit-options">
+        {#if showSplitBulkArchivesOption}
+          <label class="import-option-field">
+            <input bind:checked={splitBulkArchivesIntoDatasets} disabled={busy} type="checkbox" />
+            <span class="import-option-copy">
+              <span>{t('radtrack-import_split_bulk_datasets-label')}</span>
+              <span class="faint">{t('radtrack-import_split_bulk_datasets-help')}</span>
+            </span>
+          </label>
+        {/if}
         <label class="import-option-field">
-          <input bind:checked={splitBulkArchivesIntoDatasets} type="checkbox" />
-          <span class="import-option-copy">
-            <span>{t('radtrack-import_split_bulk_datasets-label')}</span>
-            <span class="faint">{t('radtrack-import_split_bulk_datasets-help')}</span>
-          </span>
-        </label>
-        <label class="import-option-field">
-          <input bind:checked={advancedTrackDeduplication} type="checkbox" />
+          <input bind:checked={advancedTrackDeduplication} disabled={busy} type="checkbox" />
           <span class="import-option-copy">
             <span>{t('radtrack-import_advanced_deduplication-label')}</span>
             <span class="faint">{t('radtrack-import_advanced_deduplication-help')}</span>
@@ -601,7 +724,10 @@
       </div>
     </div>
     {#if errorMessage}
-      <p class="muted">{errorMessage}</p>
+      <div aria-atomic="true" aria-live="assertive" class="import-alert" role="alert">
+        <strong>{t('radtrack-import_failed_alert-title')}</strong>
+        <p>{errorMessage}</p>
+      </div>
     {/if}
   </div>
 </section>
@@ -790,6 +916,24 @@
 {/if}
 
 <style>
+  .import-activity {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .import-alert {
+    display: grid;
+    gap: var(--space-1);
+    padding: var(--space-3);
+    border: 1px solid var(--color-danger);
+    border-radius: var(--radius-md);
+    background: var(--color-danger-soft);
+  }
+
+  .import-alert p {
+    margin: 0;
+  }
+
   .import-option-field {
     display: grid;
     grid-template-columns: auto 1fr;
@@ -811,6 +955,11 @@
   .import-option-copy {
     display: grid;
     gap: var(--space-1);
+  }
+
+  .dropzone.disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
   }
 
   .import-submit-actions {
@@ -871,5 +1020,21 @@
   .import-warning-list {
     margin: 0;
     padding-left: 1.2rem;
+  }
+
+  .progress.processing > span {
+    width: 34%;
+    background: linear-gradient(90deg, var(--color-start), var(--color-warning), var(--color-mid));
+    animation: import-processing-slide 1.4s ease-in-out infinite;
+  }
+
+  @keyframes import-processing-slide {
+    0% {
+      transform: translateX(-115%);
+    }
+
+    100% {
+      transform: translateX(315%);
+    }
   }
 </style>

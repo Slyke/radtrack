@@ -1,6 +1,12 @@
 import Busboy from 'busboy';
 import { AppError, createAppError } from '../lib/errors.js';
 import { logError } from '../lib/logger.js';
+import {
+  coerceMeasurementValueMap,
+  inferSupportedFieldsFromMeasurementSets,
+  normalizeSupportedFields,
+  rowHasSupportedFieldValue
+} from '../utils/datalog-fields.js';
 import { createOpaqueId, sha256Hex } from '../utils/ids.js';
 import {
   computeParsedTrackSemanticChecksum,
@@ -11,35 +17,33 @@ import {
 } from '../utils/track.js';
 import { canImport } from './permissions.js';
 
-const batchInsertReadings = async ({ client, trackId, rows, actorCreatedAt }) => {
+const batchInsertReadings = async ({ client, datalogId, rows, actorCreatedAt }) => {
   const chunkSize = 250;
 
   for (let startIndex = 0; startIndex < rows.length; startIndex += chunkSize) {
     const slice = rows.slice(startIndex, startIndex + chunkSize);
-    const values = [];
-    const placeholders = [];
+    const readingValues = [];
+    const readingPlaceholders = [];
+    const numericValuePlaceholders = [];
+    const numericValues = [];
 
-    slice.forEach((row, index) => {
-      const base = index * 28;
-      placeholders.push(
-        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}, $${base + 14}, $${base + 15}, $${base + 16}, $${base + 17}, $${base + 18}, $${base + 19}, $${base + 20}, $${base + 21}, $${base + 22}, $${base + 23}, $${base + 24}, $${base + 25}::jsonb, $${base + 26}::jsonb, $${base + 27}, $${base + 28})`
+    slice.forEach((row) => {
+      const readingId = createOpaqueId();
+      const base = readingValues.length;
+      readingPlaceholders.push(
+        `($${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5}, $${base + 6}, $${base + 7}, $${base + 8}, $${base + 9}, $${base + 10}, $${base + 11}, $${base + 12}, $${base + 13}, $${base + 14}, $${base + 15}, $${base + 16}, $${base + 17}, $${base + 18}, $${base + 19}, $${base + 20}::jsonb, $${base + 21}::jsonb, $${base + 22})`
       );
-      values.push(
-        createOpaqueId(),
-        trackId,
+      readingValues.push(
+        readingId,
+        datalogId,
         row.rawTimestamp,
         row.parsedTimeText,
         row.occurredAt,
+        row.receivedAt ?? actorCreatedAt,
         row.latitude,
         row.longitude,
-        row.accuracy,
         row.altitudeMeters ?? null,
-        row.doseRate,
-        row.countRate,
-        row.temperatureC ?? null,
-        row.humidityPct ?? null,
-        row.pressureHpa ?? null,
-        row.batteryPct ?? null,
+        row.accuracy,
         row.deviceId ?? null,
         row.deviceName ?? null,
         row.deviceType ?? null,
@@ -51,28 +55,42 @@ const batchInsertReadings = async ({ client, trackId, rows, actorCreatedAt }) =>
         row.rowNumber,
         JSON.stringify(row.warningFlags ?? []),
         JSON.stringify(row.extraJson ?? row.extra ?? {}),
-        row.receivedAt ?? actorCreatedAt,
         actorCreatedAt
       );
+
+      for (const [propKey, numericValue] of Object.entries(row.measurements ?? row.measurementValues ?? {})) {
+        const normalizedNumericValue = Number(numericValue);
+        if (!Number.isFinite(normalizedNumericValue)) {
+          continue;
+        }
+
+        const numericBase = numericValues.length;
+        numericValuePlaceholders.push(
+          `($${numericBase + 1}, $${numericBase + 2}, $${numericBase + 3}, $${numericBase + 4}, $${numericBase + 5}, $${numericBase + 6})`
+        );
+        numericValues.push(
+          createOpaqueId(),
+          readingId,
+          datalogId,
+          propKey,
+          normalizedNumericValue,
+          actorCreatedAt
+        );
+      }
     });
 
     await client.query(
       `INSERT INTO readings (
         id,
-        track_id,
+        datalog_id,
         raw_timestamp,
         parsed_time_text,
         occurred_at,
+        received_at,
         latitude,
         longitude,
-        accuracy,
         altitude_meters,
-        dose_rate,
-        count_rate,
-        temperature_c,
-        humidity_pct,
-        pressure_hpa,
-        battery_pct,
+        accuracy,
         device_id,
         device_name,
         device_type,
@@ -84,11 +102,24 @@ const batchInsertReadings = async ({ client, trackId, rows, actorCreatedAt }) =>
         row_number,
         warning_flags_json,
         extra_json,
-        received_at,
         created_at
-      ) VALUES ${placeholders.join(', ')}`,
-      values
+      ) VALUES ${readingPlaceholders.join(', ')}`,
+      readingValues
     );
+
+    if (numericValues.length) {
+      await client.query(
+        `INSERT INTO reading_numeric_values (
+          id,
+          reading_id,
+          datalog_id,
+          prop_key,
+          numeric_value,
+          created_at
+        ) VALUES ${numericValuePlaceholders.join(', ')}`,
+        numericValues
+      );
+    }
   }
 };
 
@@ -291,12 +322,11 @@ const normalizeBackupPoint = ({ point, index, correlationId = null }) => {
     longitude: asFiniteNumberOrNull(normalizedPoint.longitude),
     accuracy: asFiniteNumberOrNull(normalizedPoint.accuracy),
     altitudeMeters: asFiniteNumberOrNull(normalizedPoint.altitudeMeters),
-    doseRate: asFiniteNumberOrNull(normalizedPoint.doseRate),
-    countRate: asFiniteNumberOrNull(normalizedPoint.countRate),
-    temperatureC: asFiniteNumberOrNull(normalizedPoint.temperatureC),
-    humidityPct: asFiniteNumberOrNull(normalizedPoint.humidityPct),
-    pressureHpa: asFiniteNumberOrNull(normalizedPoint.pressureHpa),
-    batteryPct: asFiniteNumberOrNull(normalizedPoint.batteryPct),
+    measurements: coerceMeasurementValueMap({
+      input: asObject(normalizedPoint.measurements)
+        ?? asObject(normalizedPoint.measurementValues)
+        ?? {}
+    }),
     deviceId: asStringOrNull(normalizedPoint.deviceId),
     deviceName: asStringOrNull(normalizedPoint.deviceName),
     deviceType: asStringOrNull(normalizedPoint.deviceType),
@@ -329,15 +359,25 @@ const buildBackupParsedShape = ({ trackMeta, rows }) => ({
     deviceModel: trackMeta?.deviceModel,
     deviceSerial: trackMeta?.deviceSerial
   }),
+  supportedFields: normalizeSupportedFields({
+    value: trackMeta?.supportedFields
+  }),
   rows: rows.map((row) => ({
     occurredAt: row.occurredAt ?? null,
     rawTimestamp: row.rawTimestamp ?? null,
     parsedTimeText: row.parsedTimeText ?? null,
     latitude: row.latitude ?? null,
     longitude: row.longitude ?? null,
+    altitudeMeters: row.altitudeMeters ?? null,
     accuracy: row.accuracy ?? null,
-    doseRate: row.doseRate ?? null,
-    countRate: row.countRate ?? null,
+    deviceId: row.deviceId ?? null,
+    deviceName: row.deviceName ?? null,
+    deviceType: row.deviceType ?? null,
+    deviceCalibration: row.deviceCalibration ?? null,
+    firmwareVersion: row.firmwareVersion ?? null,
+    sourceReadingId: row.sourceReadingId ?? null,
+    custom: row.custom ?? null,
+    measurements: row.measurements ?? {},
     comment: row.comment ?? '',
     extraJson: row.extraJson ?? {}
   }))
@@ -359,8 +399,28 @@ const deriveBackupWarningBreakdown = ({ rows }) => {
   }));
 };
 
+const resolveSupportedFieldsForRows = ({ requestedSupportedFields, rows }) => {
+  const normalizedRequested = normalizeSupportedFields({ value: requestedSupportedFields });
+  const inferredSupportedFields = inferSupportedFieldsFromMeasurementSets({
+    measurementSets: rows.map((row) => row.measurements ?? {})
+  });
+  const supportedFields = normalizedRequested.length
+    ? normalizedRequested
+    : inferredSupportedFields;
+  const missingSupportedFields = supportedFields.filter((field) => (
+    field.valueType !== 'string'
+    && field.source !== 'synthetic'
+    && !rows.some((row) => rowHasSupportedFieldValue({ field, row }))
+  ));
+
+  return {
+    supportedFields,
+    missingSupportedFields
+  };
+};
+
 const toBackupChildName = ({ trackMeta, trackId, fileName }) => (
-  asStringOrNull(trackMeta?.trackName)
+  asStringOrNull(trackMeta?.datalogName ?? trackMeta?.trackName)
   ?? asStringOrNull(trackId)
   ?? toDatasetNameFromFileName({ fileName })
 );
@@ -551,7 +611,7 @@ export const createImportService = ({ db, audit, logger }) => {
   const findDuplicateTrackBySemanticKey = async ({ client, ownerUserId, semanticDedupeKey }) => {
     const result = await client.query(
       `SELECT id, raw_file_id
-       FROM tracks
+       FROM datalogs
        WHERE owner_user_id = $1
          AND semantic_dedupe_key = $2
        ORDER BY created_at ASC
@@ -622,8 +682,12 @@ export const createImportService = ({ db, audit, logger }) => {
   }) => {
     const trackId = createOpaqueId();
     const now = new Date().toISOString();
+    const { supportedFields } = resolveSupportedFieldsForRows({
+      requestedSupportedFields: parsed.supportedFields,
+      rows: parsed.rows
+    });
     await client.query(
-      `INSERT INTO tracks (
+      `INSERT INTO datalogs (
         id,
         dataset_id,
         raw_file_id,
@@ -631,10 +695,11 @@ export const createImportService = ({ db, audit, logger }) => {
         device_identifier_raw,
         device_model,
         device_serial,
-        track_name,
+        datalog_name,
         raw_header_line,
         raw_columns_json,
         header_metadata_json,
+        supported_fields_json,
         semantic_dedupe_key,
         row_count,
         valid_row_count,
@@ -645,8 +710,8 @@ export const createImportService = ({ db, audit, logger }) => {
         ended_at,
         created_at
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12,
-        $13, $14, $15, $16, $17, $18, $19, $20
+        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13,
+        $14, $15, $16, $17, $18, $19, $20, $21
       )`,
       [
         trackId,
@@ -660,6 +725,7 @@ export const createImportService = ({ db, audit, logger }) => {
         parsed.rawHeaderLine,
         JSON.stringify(parsed.rawColumns),
         JSON.stringify(parsed.headerMetadata),
+        JSON.stringify(supportedFields),
         semanticDedupeKey,
         parsed.rowCount,
         parsed.validRowCount,
@@ -674,7 +740,7 @@ export const createImportService = ({ db, audit, logger }) => {
 
     await batchInsertReadings({
       client,
-      trackId,
+      datalogId: trackId,
       rows: parsed.rows,
       actorCreatedAt: now
     });
@@ -693,7 +759,18 @@ export const createImportService = ({ db, audit, logger }) => {
     const trackId = createOpaqueId();
     const now = new Date().toISOString();
     const derivedTimeRange = deriveBackupTimeRange({ rows });
-    const warningBreakdown = deriveBackupWarningBreakdown({ rows });
+    const { supportedFields, missingSupportedFields } = resolveSupportedFieldsForRows({
+      requestedSupportedFields: trackMeta?.supportedFields,
+      rows
+    });
+    const warningBreakdown = [
+      ...deriveBackupWarningBreakdown({ rows }),
+      ...missingSupportedFields.map((field) => ({
+        type: 'supported_field_missing',
+        count: 1,
+        reason: `Supported field "${field.displayName}" never appeared with a usable value.`
+      }))
+    ];
     const derivedWarningCount = warningBreakdown.reduce((total, entry) => total + entry.count, 0);
     const device = deriveDeviceIdentity({
       deviceIdentifierRaw: trackMeta?.deviceIdentifierRaw,
@@ -702,7 +779,7 @@ export const createImportService = ({ db, audit, logger }) => {
     });
 
     await client.query(
-      `INSERT INTO tracks (
+      `INSERT INTO datalogs (
         id,
         dataset_id,
         raw_file_id,
@@ -710,10 +787,11 @@ export const createImportService = ({ db, audit, logger }) => {
         device_identifier_raw,
         device_model,
         device_serial,
-        track_name,
+        datalog_name,
         raw_header_line,
         raw_columns_json,
         header_metadata_json,
+        supported_fields_json,
         semantic_dedupe_key,
         row_count,
         valid_row_count,
@@ -725,8 +803,8 @@ export const createImportService = ({ db, audit, logger }) => {
         created_at,
         source_type
       ) VALUES (
-        $1, $2, NULL, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11,
-        $12, $13, $14, $15, $16, $17, $18, $19, 'import'
+        $1, $2, NULL, $3, $4, $5, $6, $7, $8, $9::jsonb, $10::jsonb, $11::jsonb, $12,
+        $13, $14, $15, $16, $17, $18, $19, $20, 'import'
       )`,
       [
         trackId,
@@ -735,10 +813,11 @@ export const createImportService = ({ db, audit, logger }) => {
         device.deviceIdentifierRaw,
         device.deviceModel,
         device.deviceSerial,
-        asStringOrNull(trackMeta?.trackName) ?? 'Imported Backup Track',
+        asStringOrNull(trackMeta?.datalogName ?? trackMeta?.trackName) ?? 'Imported Backup Datalog',
         asStringOrNull(trackMeta?.rawHeaderLine) ?? '',
         JSON.stringify(Array.isArray(trackMeta?.rawColumns) ? trackMeta.rawColumns : []),
         JSON.stringify(asObject(trackMeta?.headerMetadata) ?? {}),
+        JSON.stringify(supportedFields),
         semanticDedupeKey,
         Number.isInteger(trackMeta?.rowCount) ? trackMeta.rowCount : rows.length,
         Number.isInteger(trackMeta?.validRowCount) ? trackMeta.validRowCount : rows.length,
@@ -753,7 +832,7 @@ export const createImportService = ({ db, audit, logger }) => {
 
     await batchInsertReadings({
       client,
-      trackId,
+      datalogId: trackId,
       rows,
       actorCreatedAt: now
     });
@@ -811,13 +890,13 @@ export const createImportService = ({ db, audit, logger }) => {
         if (duplicateTrack) {
           const duplicateSummary = {
             duplicateOfRawFileId: duplicateTrack.raw_file_id ?? null,
-            duplicateOfTrackId: duplicateTrack.id,
+            duplicateOfDatalogId: duplicateTrack.id,
             dedupeMethod: 'semantic_track',
             skippedParsing: true,
             warningBreakdown: [{
               type: 'duplicate_track',
               count: 1,
-              reason: 'Track matched an earlier imported track after normalizing device and readings.'
+              reason: 'Datalog matched an earlier imported datalog after normalizing device and readings.'
             }]
           };
 
@@ -856,8 +935,8 @@ export const createImportService = ({ db, audit, logger }) => {
         sizeBytes,
         parseStatus: 'parsed',
         summary: {
-          trackId: createdTrack.trackId,
-          sourceTrackId: asStringOrNull(originalTrackId),
+          datalogId: createdTrack.trackId,
+          sourceDatalogId: asStringOrNull(originalTrackId),
           rowCount: createdTrack.rowCount,
           validRowCount: createdTrack.validRowCount,
           warningCount: createdTrack.warningCount,
@@ -1030,8 +1109,8 @@ export const createImportService = ({ db, audit, logger }) => {
       const exportedDatasets = Array.isArray(envelope.datasets)
         ? envelope.datasets.map(asObject).filter(Boolean)
         : [];
-      const exportedTracks = Array.isArray(envelope.tracks)
-        ? envelope.tracks.map(asObject).filter(Boolean)
+      const exportedTracks = Array.isArray(envelope.datalogs)
+        ? envelope.datalogs.map(asObject).filter(Boolean)
         : [];
       const datasetMetadataById = new Map(
         exportedDatasets
@@ -1107,8 +1186,8 @@ export const createImportService = ({ db, audit, logger }) => {
         }
 
         for (const [pointIndex, point] of datasetPoints.entries()) {
-          const trackId = asStringOrNull(point.trackId)
-            ?? `${sourceDatasetId}-track-${pointIndex + 1}`;
+          const trackId = asStringOrNull(point.datalogId)
+            ?? `${sourceDatasetId}-datalog-${pointIndex + 1}`;
           if (!seenTrackIds.has(trackId)) {
             seenTrackIds.add(trackId);
             trackOrder.push(trackId);
@@ -1129,7 +1208,7 @@ export const createImportService = ({ db, audit, logger }) => {
           const fallbackTrackMeta = {
             id: trackId,
             datasetId: sourceDatasetId,
-            trackName: asStringOrNull(trackPoints[0].trackName)
+            trackName: asStringOrNull(trackPoints[0].datalogName)
           };
           const childSummary = await processBackupTrack({
             client,
@@ -1175,7 +1254,7 @@ export const createImportService = ({ db, audit, logger }) => {
             formatVersion: Number.isInteger(envelope.formatVersion) ? envelope.formatVersion : null,
             exportTime: asIsoTimestampOrNull(envelope.exportTime),
             importedDatasetCount: datasetResults.length,
-            importedTrackCount: childSummaries.filter((entry) => entry.parseStatus === 'parsed').length,
+            importedDatalogCount: childSummaries.filter((entry) => entry.parseStatus === 'parsed').length,
             rawPointCount: pointRecords.length,
             children: childSummaries
           })
@@ -1275,7 +1354,7 @@ export const createImportService = ({ db, audit, logger }) => {
       client,
       batchId,
       parentRawFileId,
-      kind: 'track_file',
+      kind: 'datalog_file',
       originalFilename: fileName,
       checksum,
       sizeBytes: buffer.length,
@@ -1312,13 +1391,13 @@ export const createImportService = ({ db, audit, logger }) => {
         if (duplicateTrack) {
           const semanticDuplicateSummary = {
             duplicateOfRawFileId: duplicateTrack.raw_file_id ?? null,
-            duplicateOfTrackId: duplicateTrack.id,
+            duplicateOfDatalogId: duplicateTrack.id,
             dedupeMethod: 'semantic_track',
             skippedParsing: true,
             warningBreakdown: [{
               type: 'duplicate_track',
               count: 1,
-              reason: 'Track matched an earlier imported track after normalizing device and readings.'
+              reason: 'Datalog matched an earlier imported datalog after normalizing device and readings.'
             }]
           };
 
@@ -1353,7 +1432,7 @@ export const createImportService = ({ db, audit, logger }) => {
       });
 
       const summary = {
-        trackId,
+        datalogId: trackId,
         rowCount: parsed.rowCount,
         validRowCount: parsed.validRowCount,
         warningCount: parsed.warningCount,
@@ -1382,7 +1461,7 @@ export const createImportService = ({ db, audit, logger }) => {
     } catch (cause) {
       const appError = toLoggedAppError({
         caller: 'imports::processTrackPayload',
-        reason: 'Track payload processing failed.',
+        reason: 'Datalog payload processing failed.',
         errorKey: 'IMPORT_TRACK_PROCESS_FAILED',
         correlationId,
         context: {
@@ -1636,7 +1715,7 @@ export const createImportService = ({ db, audit, logger }) => {
             fileResults: [{
               originalFilename: child.fileName,
               sourceArchiveFilename: file.fileName,
-              importKind: 'track_file',
+              importKind: 'datalog_file',
               checksum: childSummary.checksum,
               sizeBytes: child.buffer.length,
               children: [childSummary]

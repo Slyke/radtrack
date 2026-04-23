@@ -94,18 +94,22 @@ const migrationStatements = [
     created_at TIMESTAMPTZ NOT NULL,
     UNIQUE(dataset_id, target_user_id)
   )`,
-  `CREATE TABLE IF NOT EXISTS tracks (
+  `CREATE TABLE IF NOT EXISTS datalogs (
     id TEXT PRIMARY KEY,
     dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
-    raw_file_id TEXT NOT NULL REFERENCES raw_files(id) ON DELETE RESTRICT,
+    raw_file_id TEXT REFERENCES raw_files(id) ON DELETE RESTRICT,
     owner_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     device_identifier_raw TEXT,
     device_model TEXT,
     device_serial TEXT,
-    track_name TEXT NOT NULL,
+    datalog_name TEXT NOT NULL,
     raw_header_line TEXT NOT NULL,
     raw_columns_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     header_metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    supported_fields_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+    source_type TEXT NOT NULL DEFAULT 'import',
+    ingest_datalog_id TEXT,
+    semantic_dedupe_key TEXT,
     row_count INTEGER NOT NULL DEFAULT 0,
     valid_row_count INTEGER NOT NULL DEFAULT 0,
     warning_count INTEGER NOT NULL DEFAULT 0,
@@ -115,9 +119,9 @@ const migrationStatements = [
     ended_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL
   )`,
-  `CREATE TABLE IF NOT EXISTS track_ingest_keys (
+  `CREATE TABLE IF NOT EXISTS datalog_ingest_keys (
     id TEXT PRIMARY KEY,
-    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    datalog_id TEXT NOT NULL REFERENCES datalogs(id) ON DELETE CASCADE,
     key_hash TEXT NOT NULL,
     key_prefix TEXT NOT NULL,
     label TEXT NOT NULL,
@@ -128,27 +132,28 @@ const migrationStatements = [
     last_used_at TIMESTAMPTZ,
     revoked_at TIMESTAMPTZ
   )`,
-  `CREATE TABLE IF NOT EXISTS track_shares (
+  `CREATE TABLE IF NOT EXISTS datalog_shares (
     id TEXT PRIMARY KEY,
-    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    datalog_id TEXT NOT NULL REFERENCES datalogs(id) ON DELETE CASCADE,
     target_user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     access_level TEXT NOT NULL,
     created_by TEXT NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     created_at TIMESTAMPTZ NOT NULL,
-    UNIQUE(track_id, target_user_id)
+    UNIQUE(datalog_id, target_user_id)
   )`,
   `CREATE TABLE IF NOT EXISTS readings (
     id TEXT PRIMARY KEY,
-    track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+    datalog_id TEXT NOT NULL REFERENCES datalogs(id) ON DELETE CASCADE,
     raw_timestamp TEXT,
     parsed_time_text TEXT,
     occurred_at TIMESTAMPTZ,
+    received_at TIMESTAMPTZ,
     latitude DOUBLE PRECISION,
     longitude DOUBLE PRECISION,
+    altitude_meters DOUBLE PRECISION,
     accuracy DOUBLE PRECISION,
-    dose_rate DOUBLE PRECISION,
-    count_rate DOUBLE PRECISION,
     comment TEXT,
+    custom_text TEXT,
     row_number INTEGER NOT NULL,
     is_hidden BOOLEAN NOT NULL DEFAULT FALSE,
     is_modified BOOLEAN NOT NULL DEFAULT FALSE,
@@ -157,9 +162,25 @@ const migrationStatements = [
     modified_at TIMESTAMPTZ,
     hidden_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
     hidden_at TIMESTAMPTZ,
+    device_id TEXT,
+    device_name TEXT,
+    device_type TEXT,
+    device_calibration TEXT,
+    firmware_version TEXT,
+    source_reading_id TEXT,
+    ingest_key_id TEXT REFERENCES datalog_ingest_keys(id) ON DELETE SET NULL,
     warning_flags_json JSONB NOT NULL DEFAULT '[]'::jsonb,
     extra_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     created_at TIMESTAMPTZ NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS reading_numeric_values (
+    id TEXT PRIMARY KEY,
+    reading_id TEXT NOT NULL REFERENCES readings(id) ON DELETE CASCADE,
+    datalog_id TEXT NOT NULL REFERENCES datalogs(id) ON DELETE CASCADE,
+    prop_key TEXT NOT NULL,
+    numeric_value DOUBLE PRECISION NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL,
+    UNIQUE(reading_id, prop_key)
   )`,
   `CREATE TABLE IF NOT EXISTS exclude_areas (
     id TEXT PRIMARY KEY,
@@ -204,63 +225,36 @@ const migrationStatements = [
     source TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
   )`,
-  `ALTER TABLE tracks ALTER COLUMN raw_file_id DROP NOT NULL`,
-  `ALTER TABLE tracks ADD COLUMN IF NOT EXISTS source_type TEXT`,
-  `ALTER TABLE tracks ADD COLUMN IF NOT EXISTS ingest_track_id TEXT`,
-  `ALTER TABLE tracks ADD COLUMN IF NOT EXISTS semantic_dedupe_key TEXT`,
-  `UPDATE tracks SET source_type = 'import' WHERE source_type IS NULL`,
-  `ALTER TABLE tracks ALTER COLUMN source_type SET DEFAULT 'import'`,
-  `ALTER TABLE tracks ALTER COLUMN source_type SET NOT NULL`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS received_at TIMESTAMPTZ`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS altitude_meters DOUBLE PRECISION`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS temperature_c DOUBLE PRECISION`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS humidity_pct DOUBLE PRECISION`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS pressure_hpa DOUBLE PRECISION`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS battery_pct DOUBLE PRECISION`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS device_id TEXT`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS device_name TEXT`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS device_type TEXT`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS device_calibration TEXT`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS firmware_version TEXT`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS source_reading_id TEXT`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS custom_text TEXT`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS ingest_key_id TEXT REFERENCES track_ingest_keys(id) ON DELETE SET NULL`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS is_modified BOOLEAN`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS modified_by_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
-  `ALTER TABLE readings ADD COLUMN IF NOT EXISTS modified_at TIMESTAMPTZ`,
-  `UPDATE readings SET is_modified = FALSE WHERE is_modified IS NULL`,
-  `ALTER TABLE readings ALTER COLUMN is_modified SET DEFAULT FALSE`,
-  `ALTER TABLE readings ALTER COLUMN is_modified SET NOT NULL`,
   `ALTER TABLE exclude_areas ADD COLUMN IF NOT EXISTS effect_type TEXT`,
   `ALTER TABLE exclude_areas ADD COLUMN IF NOT EXISTS compress_min_points INTEGER`,
   `ALTER TABLE exclude_areas ADD COLUMN IF NOT EXISTS compress_max_points INTEGER`,
   `UPDATE exclude_areas SET effect_type = 'hard_remove' WHERE effect_type IS NULL`,
   `ALTER TABLE exclude_areas ALTER COLUMN effect_type SET DEFAULT 'hard_remove'`,
   `ALTER TABLE exclude_areas ALTER COLUMN effect_type SET NOT NULL`,
-  `UPDATE readings SET received_at = COALESCE(received_at, created_at) WHERE received_at IS NULL`,
   `ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS scope_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
   `UPDATE audit_events SET scope_user_id = COALESCE(scope_user_id, actor_user_id) WHERE scope_user_id IS NULL`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
-  `CREATE INDEX IF NOT EXISTS idx_readings_track_id ON readings(track_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_readings_datalog_id ON readings(datalog_id)`,
   `CREATE INDEX IF NOT EXISTS idx_readings_occurred_at ON readings(occurred_at)`,
   `CREATE INDEX IF NOT EXISTS idx_readings_received_at ON readings(received_at)`,
   `CREATE INDEX IF NOT EXISTS idx_readings_latitude ON readings(latitude)`,
   `CREATE INDEX IF NOT EXISTS idx_readings_longitude ON readings(longitude)`,
-  `CREATE INDEX IF NOT EXISTS idx_readings_dose_rate ON readings(dose_rate)`,
-  `CREATE INDEX IF NOT EXISTS idx_readings_count_rate ON readings(count_rate)`,
-  `CREATE INDEX IF NOT EXISTS idx_tracks_dataset_id ON tracks(dataset_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_tracks_owner_semantic_dedupe_key
-   ON tracks(owner_user_id, semantic_dedupe_key)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_tracks_owner_ingest_track_id
-   ON tracks(owner_user_id, ingest_track_id)
-   WHERE ingest_track_id IS NOT NULL`,
-  `CREATE INDEX IF NOT EXISTS idx_track_ingest_keys_track_id ON track_ingest_keys(track_id)`,
-  `CREATE INDEX IF NOT EXISTS idx_track_shares_target_user_id ON track_shares(target_user_id)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_track_ingest_keys_key_hash ON track_ingest_keys(key_hash)`,
-  `CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_track_source_reading_id
-   ON readings(track_id, source_reading_id)
+  `CREATE INDEX IF NOT EXISTS idx_datalogs_dataset_id ON datalogs(dataset_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_datalogs_owner_semantic_dedupe_key
+   ON datalogs(owner_user_id, semantic_dedupe_key)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_datalogs_owner_ingest_datalog_id
+   ON datalogs(owner_user_id, ingest_datalog_id)
+   WHERE ingest_datalog_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_datalog_ingest_keys_datalog_id ON datalog_ingest_keys(datalog_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_datalog_shares_target_user_id ON datalog_shares(target_user_id)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_datalog_ingest_keys_key_hash ON datalog_ingest_keys(key_hash)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_datalog_source_reading_id
+   ON readings(datalog_id, source_reading_id)
    WHERE source_reading_id IS NOT NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_reading_numeric_values_reading_id ON reading_numeric_values(reading_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_reading_numeric_values_datalog_prop_key
+   ON reading_numeric_values(datalog_id, prop_key)`,
   `CREATE INDEX IF NOT EXISTS idx_dataset_shares_target_user_id ON dataset_shares(target_user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_raw_files_checksum ON raw_files(checksum)`,
   `CREATE INDEX IF NOT EXISTS idx_raw_files_upload_batch_id ON raw_files(upload_batch_id)`,
@@ -269,6 +263,136 @@ const migrationStatements = [
   `CREATE INDEX IF NOT EXISTS idx_audit_events_created_at ON audit_events(created_at)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_events_scope_user_id ON audit_events(scope_user_id)`
 ];
+
+const appResetStatements = [
+  `DROP TABLE IF EXISTS reading_numeric_values CASCADE`,
+  `DROP TABLE IF EXISTS readings CASCADE`,
+  `DROP TABLE IF EXISTS datalog_ingest_keys CASCADE`,
+  `DROP TABLE IF EXISTS datalog_shares CASCADE`,
+  `DROP TABLE IF EXISTS datalogs CASCADE`,
+  `DROP TABLE IF EXISTS track_ingest_keys CASCADE`,
+  `DROP TABLE IF EXISTS track_shares CASCADE`,
+  `DROP TABLE IF EXISTS tracks CASCADE`
+];
+
+const compatibleColumnsByTable = {
+  datalogs: [
+    'dataset_id',
+    'owner_user_id',
+    'datalog_name',
+    'supported_fields_json',
+    'source_type',
+    'ingest_datalog_id',
+    'semantic_dedupe_key'
+  ],
+  datalog_ingest_keys: [
+    'datalog_id',
+    'key_hash',
+    'key_prefix',
+    'label'
+  ],
+  datalog_shares: [
+    'datalog_id',
+    'target_user_id',
+    'access_level'
+  ],
+  readings: [
+    'datalog_id',
+    'received_at',
+    'altitude_meters',
+    'accuracy',
+    'custom_text',
+    'source_reading_id',
+    'ingest_key_id',
+    'extra_json'
+  ],
+  reading_numeric_values: [
+    'reading_id',
+    'datalog_id',
+    'prop_key',
+    'numeric_value'
+  ]
+};
+
+const loadExistingColumns = async ({ pool, tableNames }) => {
+  if (!tableNames.length) {
+    return new Map();
+  }
+
+  const result = await pool.query(
+    `SELECT table_name, column_name
+     FROM information_schema.columns
+     WHERE table_schema = 'public'
+       AND table_name = ANY($1::text[])
+     ORDER BY table_name, column_name`,
+    [tableNames]
+  );
+
+  const columnsByTable = new Map();
+  for (const row of result.rows) {
+    if (!columnsByTable.has(row.table_name)) {
+      columnsByTable.set(row.table_name, new Set());
+    }
+
+    columnsByTable.get(row.table_name).add(row.column_name);
+  }
+
+  return columnsByTable;
+};
+
+const getIncompatibleAppSchemaReason = async ({ pool }) => {
+  const legacyTableResult = await pool.query(
+    `SELECT
+       to_regclass('public.tracks') AS legacy_tracks,
+       to_regclass('public.track_ingest_keys') AS legacy_track_ingest_keys,
+       to_regclass('public.track_shares') AS legacy_track_shares`
+  );
+  const legacyTables = legacyTableResult.rows[0] ?? {};
+
+  if (legacyTables.legacy_tracks || legacyTables.legacy_track_ingest_keys || legacyTables.legacy_track_shares) {
+    return 'legacy track tables detected';
+  }
+
+  const columnsByTable = await loadExistingColumns({
+    pool,
+    tableNames: Object.keys(compatibleColumnsByTable)
+  });
+
+  for (const [tableName, requiredColumns] of Object.entries(compatibleColumnsByTable)) {
+    const existingColumns = columnsByTable.get(tableName);
+    if (!existingColumns) {
+      continue;
+    }
+
+    const missingColumns = requiredColumns.filter((columnName) => !existingColumns.has(columnName));
+    if (missingColumns.length) {
+      return `${tableName} is missing columns: ${missingColumns.join(', ')}`;
+    }
+  }
+
+  return null;
+};
+
+const resetIncompatibleAppSchemaIfNeeded = async ({ pool, logger, correlationId }) => {
+  const incompatibleReason = await getIncompatibleAppSchemaReason({ pool });
+  if (!incompatibleReason) {
+    return;
+  }
+
+  logger.warn({
+    caller: 'db::resetIncompatibleAppSchemaIfNeeded',
+    message: 'Resetting incompatible app schema before migrations.',
+    correlationId,
+    errorKey: 'DB_MIGRATION_FAILED',
+    context: {
+      reason: incompatibleReason
+    }
+  });
+
+  for (const statement of appResetStatements) {
+    await pool.query(statement);
+  }
+};
 
 export const createDatabase = async ({ runtimeConfig, logger, correlationId }) => {
   const pool = new Pool({
@@ -293,10 +417,28 @@ export const createDatabase = async ({ runtimeConfig, logger, correlationId }) =
   }
 
   try {
+    await resetIncompatibleAppSchemaIfNeeded({ pool, logger, correlationId });
     for (const statement of migrationStatements) {
-      await pool.query(statement);
+      try {
+        await pool.query(statement);
+      } catch (cause) {
+        throw createAppError({
+          caller: 'db::createDatabase',
+          reason: 'Failed running a database migration statement.',
+          errorKey: 'DB_MIGRATION_FAILED',
+          correlationId,
+          context: {
+            statement
+          },
+          cause
+        });
+      }
     }
   } catch (cause) {
+    if (cause?.name === 'AppError') {
+      throw cause;
+    }
+
     throw createAppError({
       caller: 'db::createDatabase',
       reason: 'Failed running database migrations.',

@@ -29,33 +29,6 @@ export const createExportService = ({ db, queryService, settingsService }) => {
     return compacted;
   };
 
-  const buildTrackPointProperties = ({ points }) => {
-    const pointPropertiesByTrackId = new Map();
-
-    for (const point of points) {
-      if (!isPlainObject(point) || typeof point.trackId !== 'string' || !point.trackId) {
-        continue;
-      }
-
-      const keys = Object.keys(point).sort();
-      const existing = pointPropertiesByTrackId.get(point.trackId);
-      if (!existing) {
-        pointPropertiesByTrackId.set(point.trackId, new Set(keys));
-        continue;
-      }
-
-      for (const key of [...existing]) {
-        if (!keys.includes(key)) {
-          existing.delete(key);
-        }
-      }
-    }
-
-    return new Map(
-      [...pointPropertiesByTrackId.entries()].map(([trackId, keys]) => [trackId, [...keys].sort()])
-    );
-  };
-
   const buildCompactPoint = ({ point }) => {
     const extra = isPlainObject(point.extra) && Object.keys(point.extra).length
       ? point.extra
@@ -66,18 +39,12 @@ export const createExportService = ({ db, queryService, settingsService }) => {
 
     return compactValue({
       datasetId: point.datasetId,
-      trackId: point.trackId,
+      datalogId: point.datalogId,
       occurredAt: point.occurredAt,
       latitude: point.latitude,
       longitude: point.longitude,
       accuracy: point.accuracy,
       altitudeMeters: point.altitudeMeters,
-      doseRate: point.doseRate,
-      countRate: point.countRate,
-      temperatureC: point.temperatureC,
-      humidityPct: point.humidityPct,
-      pressureHpa: point.pressureHpa,
-      batteryPct: point.batteryPct,
       deviceId: point.deviceId,
       deviceName: point.deviceName,
       deviceType: point.deviceType,
@@ -86,20 +53,22 @@ export const createExportService = ({ db, queryService, settingsService }) => {
       sourceReadingId: point.sourceReadingId,
       comment: comment || undefined,
       custom: point.custom,
+      measurements: point.measurements,
       extra
     });
   };
 
-  const buildTrackMetadataRecord = ({ row, fullExport, pointProperties }) => {
+  const buildTrackMetadataRecord = ({ row, fullExport }) => {
     const base = {
       id: row.id,
       datasetId: row.dataset_id,
       sourceType: row.source_type,
-      trackName: row.track_name,
+      datalogName: row.datalog_name,
       deviceIdentifierRaw: row.device_identifier_raw,
       rawHeaderLine: row.raw_header_line,
       rawColumns: row.raw_columns_json,
       headerMetadata: row.header_metadata_json,
+      supportedFields: row.supported_fields_json,
       rowCount: row.row_count,
       validRowCount: row.valid_row_count,
       warningCount: row.warning_count,
@@ -107,8 +76,7 @@ export const createExportService = ({ db, queryService, settingsService }) => {
       skippedRowCount: row.skipped_row_count,
       startedAt: row.started_at,
       endedAt: row.ended_at,
-      createdAt: row.created_at,
-      pointProperties
+      createdAt: row.created_at
     };
 
     if (fullExport) {
@@ -147,7 +115,7 @@ export const createExportService = ({ db, queryService, settingsService }) => {
     });
   };
 
-  const loadTrackMetadata = async ({ trackIds, fullExport, pointPropertiesByTrackId }) => {
+  const loadTrackMetadata = async ({ trackIds, fullExport }) => {
     if (!trackIds.length) {
       return [];
     }
@@ -157,13 +125,14 @@ export const createExportService = ({ db, queryService, settingsService }) => {
          id,
          dataset_id,
          source_type,
-         track_name,
+         datalog_name,
          device_identifier_raw,
          device_model,
          device_serial,
          raw_header_line,
          raw_columns_json,
          header_metadata_json,
+         supported_fields_json,
          row_count,
          valid_row_count,
          warning_count,
@@ -172,7 +141,7 @@ export const createExportService = ({ db, queryService, settingsService }) => {
          started_at,
          ended_at,
          created_at
-       FROM tracks
+       FROM datalogs
        WHERE id = ANY($1::text[])`,
       [trackIds]
     );
@@ -183,8 +152,7 @@ export const createExportService = ({ db, queryService, settingsService }) => {
       return row
         ? [buildTrackMetadataRecord({
             row,
-            fullExport,
-            pointProperties: pointPropertiesByTrackId.get(trackId) ?? []
+            fullExport
           })]
         : [];
     });
@@ -207,8 +175,8 @@ export const createExportService = ({ db, queryService, settingsService }) => {
     const uiConfig = await settingsService.getUiConfig();
     const buildInfo = getBuildInfo();
     const envelope = {
-      title: 'RadTrack Track Export',
-      type: 'radtrack-export',
+      title: 'RadTrack Datalog Export',
+      type: 'radtrack-datalog-export',
       formatVersion: 3,
       exportTime: new Date().toISOString(),
       build: buildInfo.label,
@@ -222,7 +190,7 @@ export const createExportService = ({ db, queryService, settingsService }) => {
         applyExcludeAreas: Boolean(input?.applyExcludeAreas)
       },
       datasets: [],
-      tracks: [],
+      datalogs: [],
       raw: null,
       aggregates: null
     };
@@ -272,15 +240,11 @@ export const createExportService = ({ db, queryService, settingsService }) => {
 
     if (envelope.raw?.points?.length) {
       const trackIds = [...new Set(envelope.raw.points
-        .map((point) => point.trackId)
+        .map((point) => point.datalogId)
         .filter((trackId) => typeof trackId === 'string' && trackId))];
-      const pointPropertiesByTrackId = buildTrackPointProperties({
-        points: envelope.raw.points
-      });
-      envelope.tracks = await loadTrackMetadata({
+      envelope.datalogs = await loadTrackMetadata({
         trackIds,
-        fullExport,
-        pointPropertiesByTrackId
+        fullExport
       });
     }
 

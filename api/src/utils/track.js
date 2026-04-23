@@ -1,6 +1,12 @@
 import yauzl from 'yauzl';
 import { Buffer } from 'node:buffer';
 import { createAppError } from '../lib/errors.js';
+import {
+  humanizePropKey,
+  inferSupportedFieldsFromMeasurementSets,
+  normalizeSupportedFields,
+  normalizePropKey
+} from './datalog-fields.js';
 import { sha256Hex } from './ids.js';
 
 const filetimeEpochOffset = 116444736000000000n;
@@ -76,9 +82,53 @@ const parseDeviceIdentifier = ({ raw }) => {
 const splitTsvLine = ({ line }) => String(line ?? '').split('\t');
 
 const warningTypeReasonMap = {
-  timestamp_mismatch: 'Timestamp and text time did not agree.',
-  duplicate_row: 'Duplicate readings were detected.'
+  duplicate_row: 'Duplicate readings were detected.',
+  supported_field_missing: 'Supported field never appeared with a usable value.'
 };
+
+const measurementCandidateExclusions = new Set([
+  'timestamp',
+  'time',
+  'latitude',
+  'longitude',
+  'altitude',
+  'altitudeMeters',
+  'accuracy',
+  'comment'
+]);
+
+const coreSupportedFieldCandidates = [
+  {
+    propKey: 'occurredAt',
+    displayName: 'Time',
+    valueType: 'time',
+    matches: ['timestamp', 'time']
+  },
+  {
+    propKey: 'latitude',
+    displayName: 'Latitude',
+    valueType: 'number',
+    matches: ['latitude']
+  },
+  {
+    propKey: 'longitude',
+    displayName: 'Longitude',
+    valueType: 'number',
+    matches: ['longitude']
+  },
+  {
+    propKey: 'altitudeMeters',
+    displayName: 'Altitude',
+    valueType: 'number',
+    matches: ['altitude', 'altitudeMeters']
+  },
+  {
+    propKey: 'accuracy',
+    displayName: 'Accuracy',
+    valueType: 'number',
+    matches: ['accuracy']
+  }
+];
 
 export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => {
   const text = buffer.toString('utf8').replace(/^\uFEFF/, '');
@@ -107,6 +157,41 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
     rawTokens: headerTokens,
     unknownTokens: headerTokens.slice(2)
   };
+  const normalizedColumnKeys = new Set(columns.map((column) => normalizePropKey({ value: column })).filter(Boolean));
+  const supportedFields = [
+    ...coreSupportedFieldCandidates.flatMap((field) => (
+      field.matches.some((candidate) => normalizedColumnKeys.has(candidate))
+        ? [{
+            propKey: field.propKey,
+            displayName: field.displayName,
+            source: 'core',
+            valueType: field.valueType
+          }]
+        : []
+    )),
+    ...columns.flatMap((column) => {
+      const propKey = normalizePropKey({ value: column });
+      if (!propKey || measurementCandidateExclusions.has(propKey)) {
+        return [];
+      }
+
+      return [{
+        propKey,
+        displayName: humanizePropKey({ value: column }) ?? humanizePropKey({ value: propKey }) ?? propKey,
+        source: 'measurement',
+        valueType: 'number'
+      }];
+    })
+  ];
+  if (device.deviceIdentifierRaw) {
+    supportedFields.push({
+      propKey: 'deviceId',
+      displayName: 'Device ID',
+      source: 'measurement',
+      valueType: 'string'
+    });
+  }
+  const normalizedSupportedFields = normalizeSupportedFields({ value: supportedFields });
 
   let warningCount = 0;
   let errorCount = 0;
@@ -118,6 +203,7 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
   const warningTypeCounts = new Map();
   const rows = [];
   const rowDedup = new Set();
+  const observedSupportedFieldKeys = new Set();
   const incrementWarningTypeCount = (type) => {
     warningTypeCounts.set(type, (warningTypeCounts.get(type) ?? 0) + 1);
   };
@@ -147,19 +233,12 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
     const occurredAtFromText = parseRawTimeTextUtc({ value: record.Time });
     const warningFlags = [];
 
-    let occurredAt = occurredAtFromFiletime ?? occurredAtFromText;
-    if (
-      occurredAtFromFiletime
-      && occurredAtFromText
-      && occurredAtFromFiletime !== occurredAtFromText
-    ) {
-      warningFlags.push('timestamp_mismatch');
-      warningCount += 1;
-      incrementWarningTypeCount('timestamp_mismatch');
-    }
+    const occurredAt = occurredAtFromFiletime ?? occurredAtFromText;
 
     const latitude = parseNumber({ value: record.Latitude });
     const longitude = parseNumber({ value: record.Longitude });
+    const altitudeMeters = parseNumber({ value: record.Altitude ?? record.AltitudeMeters });
+    const accuracy = parseNumber({ value: record.Accuracy });
     if (latitude === null || longitude === null) {
       errorCount += 1;
       skippedRowCount += 1;
@@ -171,7 +250,54 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
       continue;
     }
 
-    const rowKey = sha256Hex({ value: `${record.Timestamp}\u0000${record.Time}\u0000${latitude}\u0000${longitude}\u0000${record.DoseRate}\u0000${record.CountRate}\u0000${record.Comment ?? ''}` });
+    const measurements = {};
+    const rowExtraJson = { ...extraColumns };
+    for (const [column, rawValue] of Object.entries(record)) {
+      const propKey = normalizePropKey({ value: column });
+      if (!propKey || measurementCandidateExclusions.has(propKey)) {
+        continue;
+      }
+
+      const numericValue = parseNumber({ value: rawValue });
+      if (numericValue === null) {
+        if (rawValue !== undefined && rawValue !== null && String(rawValue).trim() !== '') {
+          rowExtraJson[column] = rawValue;
+        }
+        continue;
+      }
+
+      measurements[propKey] = numericValue;
+      observedSupportedFieldKeys.add(propKey);
+    }
+
+    if (occurredAt) {
+      observedSupportedFieldKeys.add('occurredAt');
+    }
+    if (latitude !== null) {
+      observedSupportedFieldKeys.add('latitude');
+    }
+    if (longitude !== null) {
+      observedSupportedFieldKeys.add('longitude');
+    }
+    if (altitudeMeters !== null) {
+      observedSupportedFieldKeys.add('altitudeMeters');
+    }
+    if (accuracy !== null) {
+      observedSupportedFieldKeys.add('accuracy');
+    }
+
+    const rowKey = sha256Hex({
+      value: JSON.stringify({
+        timestamp: record.Timestamp ?? null,
+        time: record.Time ?? null,
+        latitude,
+        longitude,
+        altitudeMeters,
+        accuracy,
+        measurements,
+        comment: record.Comment ?? ''
+      })
+    });
     if (rowDedup.has(rowKey)) {
       warningFlags.push('duplicate_row');
       warningCount += 1;
@@ -193,14 +319,34 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
       occurredAt,
       latitude,
       longitude,
-      accuracy: parseNumber({ value: record.Accuracy }),
-      doseRate: parseNumber({ value: record.DoseRate }),
-      countRate: parseNumber({ value: record.CountRate }),
+      altitudeMeters,
+      accuracy,
+      deviceId: device.deviceIdentifierRaw,
+      measurements,
       comment: record.Comment ?? '',
       warningFlags,
-      extraJson: extraColumns
+      extraJson: rowExtraJson
     });
     validRowCount += 1;
+  }
+
+  for (const field of normalizedSupportedFields) {
+    if (field.valueType === 'string') {
+      continue;
+    }
+
+    if (observedSupportedFieldKeys.has(field.propKey)) {
+      continue;
+    }
+
+    warningCount += 1;
+    incrementWarningTypeCount('supported_field_missing');
+    warnings.push({
+      rowNumber: null,
+      type: 'supported_field_missing',
+      field: field.propKey,
+      reason: `Supported field "${field.displayName}" never appeared with a usable value.`
+    });
   }
 
   return {
@@ -209,6 +355,7 @@ export const parseTrackBuffer = ({ buffer, fileName, correlationId = null }) => 
     rawColumns: columns,
     headerMetadata,
     device,
+    supportedFields: normalizedSupportedFields,
     rowCount: Math.max(rawLines.length - 2, 0),
     validRowCount,
     warningCount,
@@ -234,9 +381,18 @@ export const computeParsedTrackSemanticChecksum = ({ parsed }) => {
       parsedTimeText: row.occurredAt ? null : (row.parsedTimeText ?? null),
       latitude: row.latitude ?? null,
       longitude: row.longitude ?? null,
+      altitudeMeters: row.altitudeMeters ?? null,
       accuracy: row.accuracy ?? null,
-      doseRate: row.doseRate ?? null,
-      countRate: row.countRate ?? null,
+      deviceId: row.deviceId ?? null,
+      deviceName: row.deviceName ?? null,
+      deviceType: row.deviceType ?? null,
+      deviceCalibration: row.deviceCalibration ?? null,
+      firmwareVersion: row.firmwareVersion ?? null,
+      sourceReadingId: row.sourceReadingId ?? null,
+      custom: row.custom ?? null,
+      measurements: Object.fromEntries(
+        Object.entries(row.measurements ?? {}).sort(([left], [right]) => left.localeCompare(right))
+      ),
       comment: row.comment ?? '',
       extraJson: row.extraJson ?? {}
     }))
@@ -247,6 +403,7 @@ export const computeParsedTrackSemanticChecksum = ({ parsed }) => {
       deviceIdentifierRaw: parsed.device.deviceIdentifierRaw ?? null,
       deviceModel: parsed.device.deviceModel ?? null,
       deviceSerial: parsed.device.deviceSerial ?? null,
+      supportedFields: parsed.supportedFields ?? [],
       rowCount: parsed.rows.length,
       rows: normalizedRows
     })
@@ -300,7 +457,7 @@ const isRadTrackExportEnvelope = ({ value }) => (
   Boolean(value)
   && typeof value === 'object'
   && !Array.isArray(value)
-  && value.type === 'radtrack-export'
+  && value.type === 'radtrack-datalog-export'
 );
 
 export const extractSupportedArchiveEntries = async ({ buffer, correlationId = null }) => {

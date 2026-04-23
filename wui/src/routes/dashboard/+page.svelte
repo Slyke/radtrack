@@ -82,7 +82,7 @@
               <tr>
                 <td><a href={`/datasets/${dataset.id}`}>{dataset.name}</a></td>
                 <td>{dataset.accessLevel}</td>
-                <td>{dataset.trackCount}</td>
+                <td>{dataset.datalogCount}</td>
               </tr>
             {/each}
           </tbody>
@@ -93,7 +93,7 @@
     <article class="panel">
       <div class="page-header">
         <h2>{t('radtrack-dashboard_recent_uploads-title')}</h2>
-        <a href="/import">{t('radtrack-common_import-button')}</a>
+        <a href="/import-export">{t('radtrack-common_import_export-button')}</a>
       </div>
       <div class="table-wrap">
         <table>

@@ -5,7 +5,30 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import LeafletMap from '$lib/components/LeafletMap.svelte';
   import { apiFetch } from '$lib/api/client';
+  import {
+    getMetricOptionLabels,
+    humanizePropKey,
+    isAggregateTimePropKey,
+    mergePopupFields,
+    normalizeSupportedFields,
+    type MetricField
+  } from '$lib/datalog-fields';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
+  import {
+    isMapDatasetDefaultEnabled,
+    loadMapDatasetDefaults,
+    loadMapDatasetOrder,
+    orderMapDatasets,
+    type MapDatasetDefaultRecord
+  } from '$lib/map-dataset-defaults';
+  import {
+    isMapFieldVisible,
+    loadMapFieldOrder,
+    loadMapFieldVisibility,
+    orderMapFields,
+    type MapFieldOrder,
+    type MapFieldVisibilityRecord
+  } from '$lib/map-field-visibility';
   import { sessionStore } from '$lib/stores/session';
 
   type AggregateStats = {
@@ -30,26 +53,39 @@
       end: string | null;
     };
     stats: AggregateStats;
-    metrics: {
-      doseRate: AggregateStats;
-      countRate: AggregateStats;
-      accuracy: AggregateStats;
-      temperatureC: AggregateStats;
+    metrics: Record<string, AggregateStats>;
+    dataValues: Record<string, string[]>;
+    cache?: {
+      hit: boolean;
+      key: string;
+      source: 'cache' | 'computed';
+      ttlSecondsRemaining: number | null;
     };
   };
 
   type MapPoint = {
     id: string;
     datasetId: string;
+    datalogId: string;
+    datalogName?: string | null;
+    rawTimestamp?: string | null;
+    parsedTimeText?: string | null;
     latitude: number;
     longitude: number;
     occurredAt: string | null;
     receivedAt?: string | null;
-    doseRate: number | null;
-    countRate: number | null;
+    altitudeMeters: number | null;
     accuracy: number | null;
-    temperatureC?: number | null;
+    measurements: Record<string, number>;
+    deviceId?: string | null;
+    deviceName?: string | null;
+    deviceType?: string | null;
+    deviceCalibration?: string | null;
+    firmwareVersion?: string | null;
+    sourceReadingId?: string | null;
+    custom?: string | null;
     comment: string | null;
+    extra?: Record<string, unknown>;
   };
 
   type DatasetOption = {
@@ -73,6 +109,8 @@
     datasetName: string;
     trackName: string | null;
     rowCount: number;
+    supportedFields: MetricField[];
+    metricFields: MetricField[];
   };
 
   type BasemapKey = 'default' | 'satellite' | 'light' | 'topo';
@@ -97,7 +135,7 @@
     combinedDatasetIds: string[];
     trackIds: string[];
     trackSelectionMode: 'all' | 'include' | 'none';
-    metric: 'dose_rate' | 'count_rate' | 'accuracy';
+    metric: string;
     mode: 'aggregate' | 'raw';
     shape: 'hexagon' | 'square' | 'circle';
     aggregateStat: 'min' | 'max' | 'mean' | 'median' | 'mode' | 'count';
@@ -117,12 +155,12 @@
   };
 
   type PopupFields = {
-    time: boolean;
-    count: boolean;
-    doseRate: boolean;
-    countRate: boolean;
-    accuracy: boolean;
-    temperatureC: boolean;
+    metrics: Record<string, boolean>;
+  };
+
+  type PopupStateSnapshot = {
+    metrics: Record<string, boolean>;
+    touched: Record<string, boolean>;
   };
 
   type ColorScaleSettings = {
@@ -169,7 +207,7 @@
     combinedDatasetIds: [],
     trackIds: [],
     trackSelectionMode: 'all',
-    metric: 'dose_rate',
+    metric: 'doseRate',
     mode: 'aggregate',
     shape: 'hexagon',
     aggregateStat: 'mean',
@@ -179,12 +217,12 @@
   });
 
   const createInitialPopupFields = (): PopupFields => ({
-    time: true,
-    count: true,
-    doseRate: true,
-    countRate: true,
-    accuracy: true,
-    temperatureC: true
+    metrics: {}
+  });
+
+  const createInitialPopupStateSnapshot = (): PopupStateSnapshot => ({
+    metrics: {},
+    touched: {}
   });
 
   const createInitialColorScaleSettings = (): ColorScaleSettings => ({
@@ -216,6 +254,11 @@
     applyExcludeAreas: source.applyExcludeAreas
   });
 
+  const clonePopupStateSnapshot = (source: PopupStateSnapshot): PopupStateSnapshot => ({
+    metrics: { ...source.metrics },
+    touched: { ...source.touched }
+  });
+
   const cloneAppliedFilters = (source: AppliedMapFilters): AppliedMapFilters => ({
     ...cloneFilters(source),
     appliedCellSizeMeters: Number(source.appliedCellSizeMeters)
@@ -224,6 +267,22 @@
   const toFiniteNumber = (value: unknown) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const booleanRecordChanged = ({
+    current,
+    next
+  }: {
+    current: Record<string, boolean>;
+    next: Record<string, boolean>;
+  }) => {
+    const currentKeys = Object.keys(current);
+    const nextKeys = Object.keys(next);
+    if (currentKeys.length !== nextKeys.length) {
+      return true;
+    }
+
+    return nextKeys.some((key) => current[key] !== next[key]);
   };
 
   const getAppliedCellSizeMeters = ({
@@ -429,13 +488,21 @@
   let viewport = $state(createInitialViewport());
   let filters = $state(createInitialFilters());
   let popupFields = $state(createInitialPopupFields());
+  let popupFieldTouched = $state<Record<string, boolean>>({});
+  let appliedPopupState = $state<PopupStateSnapshot>(createInitialPopupStateSnapshot());
   let colorScaleSettings = $state(createInitialColorScaleSettings());
   let activeQuery = $state<MapQuerySnapshot | null>(null);
   let loadingTrackDatasetIds = $state<string[]>([]);
   let basemapKey = $state<BasemapKey>('default');
-
+  let mapDatasetDefaults = $state<MapDatasetDefaultRecord>({});
+  let mapDatasetOrder = $state<string[]>([]);
+  let mapFieldOrder = $state<MapFieldOrder>([]);
+  let mapFieldVisibility = $state<MapFieldVisibilityRecord>({});
   let sidebarUpdateTimer: ReturnType<typeof setTimeout> | null = null;
-  let queuedSnapshot: MapQuerySnapshot | null = null;
+  let queuedSidebarSnapshot: {
+    query: MapQuerySnapshot;
+    popupState: PopupStateSnapshot;
+  } | null = null;
   let requestVersion = 0;
 
   const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
@@ -455,11 +522,21 @@
     }
 
     return new Intl.NumberFormat($localeStore.language, {
-      maximumFractionDigits: 4
+      useGrouping: false,
+      maximumFractionDigits: 5
     }).format(value);
   };
 
   const formatCount = (value: number) => new Intl.NumberFormat($localeStore.language).format(value);
+  const formatMetricFieldValue = ({
+    field,
+    value
+  }: {
+    field: MetricField;
+    value: number | null | undefined;
+  }) => field.valueType === 'time' && typeof value === 'number'
+    ? formatTime(new Date(value).toISOString())
+    : formatNumber(value);
 
   const shortId = (value: string | null | undefined) => {
     if (!value) {
@@ -554,6 +631,18 @@
     basemapKey = availableBasemapKeys.includes(storedBasemapKey as BasemapKey)
       ? storedBasemapKey as BasemapKey
       : 'default';
+    mapDatasetDefaults = loadMapDatasetDefaults({
+      userId: $sessionStore.user?.id ?? null
+    });
+    mapDatasetOrder = loadMapDatasetOrder({
+      userId: $sessionStore.user?.id ?? null
+    });
+    mapFieldOrder = loadMapFieldOrder({
+      userId: $sessionStore.user?.id ?? null
+    });
+    mapFieldVisibility = loadMapFieldVisibility({
+      userId: $sessionStore.user?.id ?? null
+    });
   };
 
   const toggleSelectedValue = ({
@@ -716,17 +805,13 @@
     `${track.rowCount} ${t('radtrack-common_readings-label')}`
   ].join(' / ');
 
-  const getMetricLabel = (metric: MapFilters['metric']) => {
-    switch (metric) {
-      case 'count_rate':
-        return t('radtrack-common_count_rate-label');
-      case 'accuracy':
-        return t('radtrack-common_accuracy-label');
-      case 'dose_rate':
-      default:
-        return t('radtrack-common_dose_rate-label');
-    }
-  };
+  const resolveFieldLabel = ({
+    labels,
+    propKey
+  }: {
+    labels: Map<string, string>;
+    propKey: string;
+  }) => labels.get(propKey) ?? humanizePropKey(propKey) ?? propKey;
 
   const getAggregateStatLabel = (aggregateStat: MapFilters['aggregateStat']) => {
     switch (aggregateStat) {
@@ -748,11 +833,14 @@
 
   const selectionChipClass = ({ count }: { count: number }) => count ? 'chip start' : 'chip subtle';
 
-  const sortDatasets = ({ values }: { values: DatasetOption[] }) => [...values].sort((left, right) => (
-    (right.readingCount - left.readingCount)
-    || (right.trackCount - left.trackCount)
-    || left.name.localeCompare(right.name)
-  ));
+  const sortDatasets = ({ values }: { values: DatasetOption[] }) => orderMapDatasets({
+    datasets: [...values].sort((left, right) => (
+      (right.readingCount - left.readingCount)
+      || (right.trackCount - left.trackCount)
+      || left.name.localeCompare(right.name)
+    )),
+    order: mapDatasetOrder
+  });
 
   const sortTracks = ({ values }: { values: TrackOption[] }) => [...values].sort((left, right) => (
     (left.trackName ?? '').localeCompare(right.trackName ?? '')
@@ -760,6 +848,149 @@
     || (right.rowCount - left.rowCount)
     || left.id.localeCompare(right.id)
   ));
+
+  const getTrackGroupsForFilters = ({
+    sourceFilters
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+  }) => sourceFilters.datasetIds
+    .map((datasetId) => {
+      const dataset = datasets.find((entry) => entry.id === datasetId);
+      const tracks = sortTracks({
+        values: datasetTracksByDatasetId[datasetId] ?? []
+      });
+
+      return {
+        datasetId,
+        datasetName: dataset?.name ?? tracks[0]?.datasetName ?? shortId(datasetId),
+        tracks
+      };
+    })
+    .filter((group) => group.tracks.length);
+
+  const getTrackOptionsForFilters = ({
+    sourceFilters
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+  }) => {
+    const trackGroups = getTrackGroupsForFilters({ sourceFilters });
+    if (!trackGroups.length) {
+      return [] as TrackOption[];
+    }
+
+    if (sourceFilters.trackSelectionMode === 'all') {
+      return trackGroups.flatMap((group) => group.tracks);
+    }
+
+    if (sourceFilters.trackSelectionMode === 'include') {
+      return trackGroups.flatMap((group) => group.tracks)
+        .filter((track) => sourceFilters.trackIds.includes(track.id));
+    }
+
+    return [] as TrackOption[];
+  };
+
+  const collectVisibleFields = ({
+    tracks,
+    fieldSelector
+  }: {
+    tracks: TrackOption[];
+    fieldSelector: (track: TrackOption) => MetricField[];
+  }) => {
+    const merged = new Map<string, MetricField>();
+
+    for (const track of tracks) {
+      for (const field of fieldSelector(track)) {
+        if (!isMapFieldVisible({ visibility: mapFieldVisibility, propKey: field.propKey })) {
+          continue;
+        }
+
+        if (!merged.has(field.propKey)) {
+          merged.set(field.propKey, field);
+        }
+      }
+    }
+
+    return orderMapFields({
+      fields: [...merged.values()],
+      order: mapFieldOrder
+    });
+  };
+
+  const getPopupFieldDefaults = ({ tracks }: { tracks: TrackOption[] }) => {
+    const selectableFields = collectVisibleFields({
+      tracks,
+      fieldSelector: (track) => mergePopupFields(track.supportedFields ?? [])
+    });
+    const states = new Map(selectableFields.map((field) => [field.propKey, {
+      hasEnabled: false,
+      hasExplicitFalse: false
+    }]));
+
+    for (const track of tracks) {
+      for (const field of mergePopupFields(track.supportedFields ?? [])) {
+        const state = states.get(field.propKey);
+        if (!state) {
+          continue;
+        }
+
+        if (field.popupDefaultEnabled === false) {
+          state.hasExplicitFalse = true;
+        } else {
+          state.hasEnabled = true;
+        }
+      }
+    }
+
+    return Object.fromEntries(
+      [...states.entries()].map(([propKey, state]) => [
+        propKey,
+        state.hasEnabled || !state.hasExplicitFalse
+      ])
+    );
+  };
+
+  const resolvePopupMetricState = ({
+    metrics,
+    propKey,
+    touched,
+    defaults
+  }: {
+    metrics: Record<string, boolean>;
+    propKey: string;
+    touched: Record<string, boolean>;
+    defaults: Record<string, boolean>;
+  }) => (
+    touched[propKey]
+      ? (metrics[propKey] ?? defaults[propKey] ?? true)
+      : (defaults[propKey] ?? true)
+  );
+
+  const getPopupMetricStates = ({
+    metrics,
+    fields,
+    defaults,
+    touched
+  }: {
+    metrics: Record<string, boolean>;
+    fields: MetricField[];
+    defaults: Record<string, boolean>;
+    touched: Record<string, boolean>;
+  }) => Object.fromEntries(
+    fields.map((field) => [
+      field.propKey,
+      resolvePopupMetricState({
+        metrics,
+        propKey: field.propKey,
+        touched,
+        defaults
+      })
+    ])
+  );
+
+  const serializePopupMetricStates = ({ states }: { states: Record<string, boolean> }) => JSON.stringify(
+    Object.entries(states).sort(([left], [right]) => left.localeCompare(right))
+  );
 
   const effectiveCellSizeMeters = $derived(getAppliedCellSizeMeters({
     filters,
@@ -770,8 +1001,55 @@
   const activeMode = $derived(activeQuery?.filters.mode ?? filters.mode);
   const activeShape = $derived(activeQuery?.filters.shape ?? filters.shape);
   const activeAggregateStat = $derived(activeQuery?.filters.aggregateStat ?? filters.aggregateStat);
+  const pendingTrackOptions = $derived.by(() => getTrackOptionsForFilters({ sourceFilters: filters }));
+  const appliedTrackOptions = $derived.by(() => getTrackOptionsForFilters({
+    sourceFilters: activeQuery?.filters ?? filters
+  }));
+  const pendingAvailableMetricFields = $derived.by<MetricField[]>(() => collectVisibleFields({
+    tracks: pendingTrackOptions,
+    fieldSelector: (track) => track.metricFields ?? []
+  }));
+  const appliedAvailableMetricFields = $derived.by<MetricField[]>(() => collectVisibleFields({
+    tracks: appliedTrackOptions,
+    fieldSelector: (track) => track.metricFields ?? []
+  }));
+  const pendingAvailablePopupFields = $derived.by<MetricField[]>(() => collectVisibleFields({
+    tracks: pendingTrackOptions,
+    fieldSelector: (track) => mergePopupFields(track.supportedFields ?? [])
+  }));
+  const appliedAvailablePopupFields = $derived.by<MetricField[]>(() => collectVisibleFields({
+    tracks: appliedTrackOptions,
+    fieldSelector: (track) => mergePopupFields(track.supportedFields ?? [])
+  }));
+  const popupSelectableFields = $derived.by<MetricField[]>(() => pendingAvailablePopupFields);
+  const pendingPopupFieldDefaults = $derived.by<Record<string, boolean>>(() => getPopupFieldDefaults({
+    tracks: pendingTrackOptions
+  }));
+  const appliedPopupFieldDefaults = $derived.by<Record<string, boolean>>(() => getPopupFieldDefaults({
+    tracks: appliedTrackOptions
+  }));
+  const pendingMetricOptionLabels = $derived.by(() => getMetricOptionLabels(pendingAvailableMetricFields));
+  const appliedMetricOptionLabels = $derived.by(() => getMetricOptionLabels(appliedAvailableMetricFields));
+  const pendingPopupOptionLabels = $derived.by(() => getMetricOptionLabels(pendingAvailablePopupFields));
+  const appliedPopupOptionLabels = $derived.by(() => getMetricOptionLabels(appliedAvailablePopupFields));
+  const getPendingMetricLabel = (metric: string) => resolveFieldLabel({
+    labels: pendingMetricOptionLabels,
+    propKey: metric
+  });
+  const getAppliedMetricLabel = (metric: string) => resolveFieldLabel({
+    labels: appliedMetricOptionLabels,
+    propKey: metric
+  });
+  const getPendingPopupFieldLabel = (propKey: string) => resolveFieldLabel({
+    labels: pendingPopupOptionLabels,
+    propKey
+  });
+  const getAppliedPopupFieldLabel = (propKey: string) => resolveFieldLabel({
+    labels: appliedPopupOptionLabels,
+    propKey
+  });
   const activeLegendSummary = $derived.by(() => t('radtrack-map_legend_summary-label', {
-    metric: getMetricLabel(activeMetric),
+    metric: getAppliedMetricLabel(activeMetric),
     stat: getAggregateStatLabel(activeAggregateStat)
   }));
   const activeAppliedCellSizeMeters = $derived(activeQuery?.filters.appliedCellSizeMeters ?? effectiveCellSizeMeters);
@@ -790,21 +1068,38 @@
     aggregateStat: activeAggregateStat,
     settings: colorScaleSettings
   }));
-  const enabledPopupFieldCount = $derived(Object.values(popupFields).filter(Boolean).length);
-  const selectedTrackGroups = $derived.by(() => filters.datasetIds
-    .map((datasetId) => {
-      const dataset = datasets.find((entry) => entry.id === datasetId);
-      const tracks = sortTracks({
-        values: datasetTracksByDatasetId[datasetId] ?? []
-      });
-
-      return {
-        datasetId,
-        datasetName: dataset?.name ?? tracks[0]?.datasetName ?? shortId(datasetId),
-        tracks
-      };
-    })
-    .filter((group) => group.tracks.length));
+  const selectedTrackGroups = $derived.by(() => getTrackGroupsForFilters({ sourceFilters: filters }));
+  const pendingPopupMetricStates = $derived.by<Record<string, boolean>>(() => getPopupMetricStates({
+    metrics: popupFields.metrics,
+    fields: popupSelectableFields,
+    defaults: pendingPopupFieldDefaults,
+    touched: popupFieldTouched
+  }));
+  const appliedPopupMetricStates = $derived.by<Record<string, boolean>>(() => getPopupMetricStates({
+    metrics: appliedPopupState.metrics,
+    fields: appliedAvailablePopupFields,
+    defaults: appliedPopupFieldDefaults,
+    touched: appliedPopupState.touched
+  }));
+  const appliedPopupFields = $derived.by<PopupFields>(() => ({
+    metrics: appliedPopupMetricStates
+  }));
+  const popupLabelsRecord = $derived.by(() => Object.fromEntries(appliedPopupOptionLabels.entries()));
+  const fieldValueTypesRecord = $derived.by(() => Object.fromEntries(
+    appliedAvailablePopupFields.map((field) => [field.propKey, field.valueType])
+  ));
+  const visiblePopupFields = $derived.by(() => popupSelectableFields
+    .filter((field) => pendingPopupMetricStates[field.propKey]));
+  const appliedVisiblePopupFields = $derived.by(() => appliedAvailablePopupFields
+    .filter((field) => appliedPopupMetricStates[field.propKey]));
+  const appliedVisiblePointMetricFields = $derived.by(() => appliedVisiblePopupFields
+    .filter((field) => (
+      field.valueType !== 'string'
+      && field.source !== 'synthetic'
+      && !isAggregateTimePropKey(field.propKey)
+      && !['occurredAt', 'latitude', 'longitude'].includes(field.propKey)
+    )));
+  const enabledPopupFieldCount = $derived.by(() => visiblePopupFields.length);
   const trackSelectionSummary = $derived.by(() => {
     if (!filters.datasetIds.length || filters.trackSelectionMode === 'none') {
       return t('radtrack-common_none');
@@ -856,9 +1151,17 @@
   });
 
   const getAppliedFilters = () => cloneFilters(activeQuery?.filters ?? filters);
+  const getPendingPopupStateSnapshot = (): PopupStateSnapshot => ({
+    metrics: { ...popupFields.metrics },
+    touched: { ...popupFieldTouched }
+  });
+  const getAppliedPopupStateSnapshot = (): PopupStateSnapshot => clonePopupStateSnapshot(appliedPopupState);
 
   const hasPendingSidebarChanges = () => (
     serializeFilters({ filters }) !== serializeFilters({ filters: activeQuery?.filters ?? filters })
+    || serializePopupMetricStates({ states: pendingPopupMetricStates }) !== serializePopupMetricStates({
+      states: appliedPopupMetricStates
+    })
   );
 
   const clearScheduledSidebarUpdate = () => {
@@ -870,26 +1173,49 @@
     sidebarUpdateTimer = null;
   };
 
-  const requestMapData = ({ snapshot }: { snapshot: MapQuerySnapshot }) => {
-    queuedSnapshot = snapshot;
+  const requestMapData = ({
+    popupState,
+    snapshot
+  }: {
+    popupState: PopupStateSnapshot;
+    snapshot: MapQuerySnapshot;
+  }) => {
+    queuedSidebarSnapshot = {
+      query: snapshot,
+      popupState: clonePopupStateSnapshot(popupState)
+    };
 
     if (loading) {
       return;
     }
 
-    const nextSnapshot = queuedSnapshot;
-    queuedSnapshot = null;
+    const nextSnapshot = queuedSidebarSnapshot;
+    queuedSidebarSnapshot = null;
 
     if (!nextSnapshot) {
       return;
     }
 
-    void loadMapData({ snapshot: nextSnapshot });
+    void loadMapData({
+      popupState: nextSnapshot.popupState,
+      snapshot: nextSnapshot.query
+    });
   };
 
   const applySidebarFilters = () => {
     clearScheduledSidebarUpdate();
-    requestMapData({ snapshot: getCurrentQuerySnapshot() });
+    const nextPopupState = getPendingPopupStateSnapshot();
+    const nextSnapshot = getCurrentQuerySnapshot();
+
+    if (nextSnapshot.key === activeQuery?.key) {
+      appliedPopupState = nextPopupState;
+      return;
+    }
+
+    requestMapData({
+      popupState: nextPopupState,
+      snapshot: nextSnapshot
+    });
   };
 
   const scheduleSidebarAutoUpdate = () => {
@@ -908,8 +1234,8 @@
   const buildBaseQuery = ({ snapshot }: { snapshot: MapQuerySnapshot }) => ({
     datasetIds: snapshot.filters.datasetIds,
     combinedDatasetIds: snapshot.filters.combinedDatasetIds,
-    trackIds: snapshot.filters.trackIds,
-    trackSelectionMode: snapshot.filters.trackSelectionMode,
+    datalogIds: snapshot.filters.trackIds,
+    datalogSelectionMode: snapshot.filters.trackSelectionMode,
     metric: snapshot.filters.metric,
     minLat: snapshot.viewport.minLat,
     maxLat: snapshot.viewport.maxLat,
@@ -924,16 +1250,26 @@
         apiFetch<any>({ path: '/api/datasets' }),
         apiFetch<any>({ path: '/api/combined-datasets' })
       ]);
-      const sortedDatasets = sortDatasets({ values: datasetResponse.datasets });
+      const normalizedDatasets = datasetResponse.datasets.map((dataset: any) => ({
+        ...dataset,
+        trackCount: Number(dataset.trackCount ?? dataset.datalogCount ?? 0)
+      }));
+      const sortedDatasets = sortDatasets({ values: normalizedDatasets });
       datasets = sortedDatasets;
       combinedDatasets = combinedResponse.combinedDatasets;
 
       if (!filters.datasetIds.length && !filters.combinedDatasetIds.length) {
+        const defaultDatasetIds = sortedDatasets
+          .filter((dataset) => isMapDatasetDefaultEnabled({
+            defaults: mapDatasetDefaults,
+            datasetId: dataset.id
+          }))
+          .map((dataset) => dataset.id);
         filters = {
           ...filters,
-          datasetIds: sortedDatasets.map((dataset) => dataset.id),
+          datasetIds: defaultDatasetIds,
           trackIds: [],
-          trackSelectionMode: 'all'
+          trackSelectionMode: defaultDatasetIds.length ? 'all' : 'none'
         };
       }
     } catch (error) {
@@ -944,8 +1280,10 @@
   };
 
   const loadMapData = async ({
+    popupState = getAppliedPopupStateSnapshot(),
     snapshot = getCurrentQuerySnapshot()
   }: {
+    popupState?: PopupStateSnapshot;
     snapshot?: MapQuerySnapshot;
   } = {}) => {
     const requestId = ++requestVersion;
@@ -1006,18 +1344,22 @@
           ...snapshot,
           filters: cloneAppliedFilters(snapshot.filters)
         };
+        appliedPopupState = clonePopupStateSnapshot(popupState);
       }
 
       loading = false;
 
-      if (queuedSnapshot?.key === snapshot.key) {
-        queuedSnapshot = null;
+      if (queuedSidebarSnapshot?.query.key === snapshot.key) {
+        queuedSidebarSnapshot = null;
       }
 
-      if (queuedSnapshot) {
-        const nextSnapshot = queuedSnapshot;
-        queuedSnapshot = null;
-        void loadMapData({ snapshot: nextSnapshot });
+      if (queuedSidebarSnapshot) {
+        const nextSnapshot = queuedSidebarSnapshot;
+        queuedSidebarSnapshot = null;
+        void loadMapData({
+          popupState: nextSnapshot.popupState,
+          snapshot: nextSnapshot.query
+        });
       }
     }
   };
@@ -1043,12 +1385,14 @@
         nextTracksByDatasetId = {
           ...nextTracksByDatasetId,
           [datasetId]: sortTracks({
-            values: response.dataset.tracks.map((track: any) => ({
+            values: response.dataset.datalogs.map((track: any) => ({
               id: track.id,
               datasetId,
               datasetName: response.dataset.name,
-              trackName: track.trackName,
-              rowCount: Number(track.validRowCount ?? track.rowCount ?? 0)
+              trackName: track.datalogName ?? track.trackName,
+              rowCount: Number(track.validRowCount ?? track.rowCount ?? 0),
+              supportedFields: normalizeSupportedFields(track.supportedFields ?? []),
+              metricFields: track.metricFields ?? []
             }))
           })
         };
@@ -1086,6 +1430,7 @@
     }
 
     requestMapData({
+      popupState: getAppliedPopupStateSnapshot(),
       snapshot: getCurrentQuerySnapshot({
         filters: getAppliedFilters(),
         viewport: event.detail
@@ -1158,6 +1503,7 @@
     });
 
     await loadMapData({
+      popupState: getAppliedPopupStateSnapshot(),
       snapshot: getCurrentQuerySnapshot({
         filters: getAppliedFilters()
       })
@@ -1172,6 +1518,38 @@
 
   onDestroy(() => {
     clearScheduledSidebarUpdate();
+  });
+
+  $effect(() => {
+    const availableMetricKeys = pendingAvailableMetricFields.map((field) => field.propKey);
+    const popupFieldKeys = popupSelectableFields.map((field) => field.propKey);
+    if (availableMetricKeys.length && !availableMetricKeys.includes(filters.metric)) {
+      filters = {
+        ...filters,
+        metric: $sessionStore.ui?.defaultMetric && availableMetricKeys.includes($sessionStore.ui.defaultMetric)
+          ? $sessionStore.ui.defaultMetric
+          : availableMetricKeys[0]
+      };
+    }
+
+    const nextPopupMetrics: Record<string, boolean> = { ...popupFields.metrics };
+    for (const propKey of popupFieldKeys) {
+      if (popupFieldTouched[propKey]) {
+        nextPopupMetrics[propKey] = popupFields.metrics[propKey] ?? pendingPopupFieldDefaults[propKey] ?? true;
+      } else {
+        nextPopupMetrics[propKey] = pendingPopupFieldDefaults[propKey] ?? true;
+      }
+    }
+
+    if (booleanRecordChanged({
+      current: popupFields.metrics,
+      next: nextPopupMetrics
+    })) {
+      popupFields = {
+        ...popupFields,
+        metrics: nextPopupMetrics
+      };
+    }
   });
 
   $effect(() => {
@@ -1381,9 +1759,9 @@
           <label>
             <div class="muted">{t('radtrack-common_metric-label')}</div>
             <select bind:value={filters.metric} onchange={handleFilterChange}>
-              <option value="dose_rate">{t('radtrack-common_dose_rate-label')}</option>
-              <option value="count_rate">{t('radtrack-common_count_rate-label')}</option>
-              <option value="accuracy">{t('radtrack-common_accuracy-label')}</option>
+              {#each pendingAvailableMetricFields as field}
+                <option value={field.propKey}>{getPendingMetricLabel(field.propKey)}</option>
+              {/each}
             </select>
           </label>
 
@@ -1487,42 +1865,36 @@
         <details class="settings-accordion">
           <summary>
             <span>{t('radtrack-map_popup_fields-title')}</span>
-            <span class="settings-accordion-meta">
-              <span class="chip subtle">{enabledPopupFieldCount}/6</span>
+              <span class="settings-accordion-meta">
+              <span class="chip subtle">{enabledPopupFieldCount}/{popupSelectableFields.length}</span>
               <span aria-hidden="true" class="settings-accordion-icon"></span>
             </span>
           </summary>
 
           <div class="popup-field-grid">
-            <label class="checkbox-field">
-              <input bind:checked={popupFields.time} type="checkbox" />
-              <span>{t('radtrack-common_time-label')}</span>
-            </label>
-
-            <label class="checkbox-field">
-              <input bind:checked={popupFields.count} type="checkbox" />
-              <span>{t('radtrack-common_count-label')}</span>
-            </label>
-
-            <label class="checkbox-field">
-              <input bind:checked={popupFields.doseRate} type="checkbox" />
-              <span>{t('radtrack-common_dose_rate-label')}</span>
-            </label>
-
-            <label class="checkbox-field">
-              <input bind:checked={popupFields.countRate} type="checkbox" />
-              <span>{t('radtrack-common_count_rate-label')}</span>
-            </label>
-
-            <label class="checkbox-field">
-              <input bind:checked={popupFields.accuracy} type="checkbox" />
-              <span>{t('radtrack-common_accuracy-label')}</span>
-            </label>
-
-            <label class="checkbox-field">
-              <input bind:checked={popupFields.temperatureC} type="checkbox" />
-              <span>{t('radtrack-common_temperature-label')}</span>
-            </label>
+            {#each popupSelectableFields as field}
+              <label class="checkbox-field">
+                <input
+                  checked={Boolean(pendingPopupMetricStates[field.propKey])}
+                  onchange={(event) => {
+                    const checked = (event.currentTarget as HTMLInputElement).checked;
+                    popupFieldTouched = {
+                      ...popupFieldTouched,
+                      [field.propKey]: true
+                    };
+                    popupFields = {
+                      ...popupFields,
+                      metrics: {
+                        ...popupFields.metrics,
+                        [field.propKey]: checked
+                      }
+                    };
+                  }}
+                  type="checkbox"
+                />
+                <span>{getPendingPopupFieldLabel(field.propKey)}</span>
+              </label>
+            {/each}
           </div>
         </details>
       </section>
@@ -1546,12 +1918,20 @@
           <div class="grid">
             <span class="chip start">{formatTime(selectedPoint.occurredAt)}</span>
             <span class="chip start">{formatTime(selectedPoint.receivedAt)}</span>
-            <span class="chip mid">{t('radtrack-common_dose_rate-label')} {formatNumber(selectedPoint.doseRate)}</span>
-            <span class="chip mid">{t('radtrack-common_count_rate-label')} {formatNumber(selectedPoint.countRate)}</span>
-            <span class="chip warning">{t('radtrack-common_accuracy-label')} {formatNumber(selectedPoint.accuracy)}</span>
-            {#if selectedPoint.temperatureC !== null && selectedPoint.temperatureC !== undefined}
-              <span class="chip warning">{t('radtrack-common_temperature-label')} {formatNumber(selectedPoint.temperatureC)}</span>
-            {/if}
+            <span class="chip subtle">{t('radtrack-common_latitude-label')} {formatNumber(selectedPoint.latitude)}</span>
+            <span class="chip subtle">{t('radtrack-common_longitude-label')} {formatNumber(selectedPoint.longitude)}</span>
+            {#each appliedVisiblePointMetricFields as field}
+              <span class="chip mid">{getAppliedPopupFieldLabel(field.propKey)} {formatMetricFieldValue({
+                field,
+                value: field.propKey === 'altitudeMeters'
+                  ? selectedPoint.altitudeMeters
+                  : (
+                    field.propKey === 'accuracy'
+                      ? selectedPoint.accuracy
+                      : selectedPoint.measurements?.[field.propKey]
+                  )
+              })}</span>
+            {/each}
             {#if selectedPoint.comment}
               <p class="muted">{selectedPoint.comment}</p>
             {/if}
@@ -1571,19 +1951,21 @@
         </article>
       {/if}
 
-      <div class="map-stage">
+        <div class="map-stage">
         <LeafletMap
           aggregateStat={activeAggregateStat}
           aggregates={aggregates}
           attribution={activeBasemap?.attribution ?? ''}
           colorScale={activeMode === 'aggregate' ? activeColorScale : null}
+          metricLabels={popupLabelsRecord}
+          metricValueTypes={fieldValueTypesRecord}
           mode={activeMode}
           on:selectpoint={(event) => {
             selectedPoint = event.detail;
           }}
           on:viewportchange={handleViewportChange}
           points={points}
-          popupFields={popupFields}
+          popupFields={appliedPopupFields}
           shape={activeShape}
           tileUrlTemplate={activeBasemap?.tileUrlTemplate ?? ''}
         />
@@ -1649,9 +2031,17 @@
     grid-template-rows: auto minmax(0, 1fr);
     gap: var(--space-4);
     min-height: 0;
+    min-width: 0;
+    width: 100%;
   }
 
   .map-layout {
+    display: grid;
+    grid-template-columns: minmax(22rem, 30rem) minmax(0, 1fr);
+    gap: var(--space-4);
+    align-items: stretch;
+    width: 100%;
+    height: 100%;
     min-height: 0;
   }
 
@@ -1666,6 +2056,8 @@
 
   .map-canvas {
     min-height: 0;
+    min-width: 0;
+    width: 100%;
     display: grid;
     grid-template-rows: auto minmax(0, 1fr);
     gap: var(--space-4);
@@ -1678,6 +2070,8 @@
   .map-stage {
     grid-row: 2;
     min-height: 0;
+    min-width: 0;
+    width: 100%;
     height: 100%;
     position: relative;
   }
@@ -1963,6 +2357,11 @@
     .map-page {
       height: auto;
       min-height: 0;
+    }
+
+    .map-layout {
+      grid-template-columns: 1fr;
+      height: auto;
     }
 
     .map-sidebar {

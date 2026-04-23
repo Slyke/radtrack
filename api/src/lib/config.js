@@ -135,7 +135,7 @@ export const loadRuntimeConfig = async ({ correlationId = null } = {}) => {
     map: {
       tileUrlTemplate: requiredString({ value: rawConfig?.map?.tileUrlTemplate, field: 'map.tileUrlTemplate', correlationId }),
       attribution: typeof rawConfig?.map?.attribution === 'string' ? rawConfig.map.attribution : '',
-      defaultMetric: typeof rawConfig?.map?.defaultMetric === 'string' ? rawConfig.map.defaultMetric : 'dose_rate',
+      defaultMetric: typeof rawConfig?.map?.defaultMetric === 'string' ? rawConfig.map.defaultMetric : 'doseRate',
       defaultAggregateShape: typeof rawConfig?.map?.defaultAggregateShape === 'string' ? rawConfig.map.defaultAggregateShape : 'hexagon',
       defaultCellSizeMeters: asInteger({ value: rawConfig?.map?.defaultCellSizeMeters, fallback: 250 }),
       rawPointCap: asInteger({ value: rawConfig?.map?.rawPointCap, fallback: 5000 })

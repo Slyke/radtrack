@@ -39,7 +39,7 @@
   map: {
     tileUrlTemplate: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
     attribution: "&copy; OpenStreetMap contributors",
-    defaultMetric: "dose_rate",
+    defaultMetric: "doseRate",
     defaultAggregateShape: "hexagon",
     defaultCellSizeMeters: 250,
     rawPointCap: 5000

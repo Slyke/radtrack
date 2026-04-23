@@ -1,4 +1,5 @@
 import { createAppError } from '../lib/errors.js';
+import { mergeMetricFields, mergePopupFields, normalizeSupportedFields } from '../utils/datalog-fields.js';
 import { createOpaqueId } from '../utils/ids.js';
 import { canShare } from './permissions.js';
 
@@ -43,8 +44,8 @@ export const createDatasetService = ({ db, audit }) => {
       `SELECT
          d.*,
          ${datasetAccessCase({ roleParamIndex: 1, userParamIndex: 2 })} AS access_level,
-         (SELECT COUNT(*) FROM tracks t WHERE t.dataset_id = d.id) AS track_count,
-         (SELECT COUNT(*) FROM readings r JOIN tracks t ON t.id = r.track_id WHERE t.dataset_id = d.id) AS reading_count
+         (SELECT COUNT(*) FROM datalogs t WHERE t.dataset_id = d.id) AS datalog_count,
+         (SELECT COUNT(*) FROM readings r JOIN datalogs t ON t.id = r.datalog_id WHERE t.dataset_id = d.id) AS reading_count
        FROM datasets d
        WHERE ${datasetWhereClause({ roleParamIndex: 1, userParamIndex: 2 })}
        ORDER BY d.updated_at DESC`,
@@ -57,7 +58,7 @@ export const createDatasetService = ({ db, audit }) => {
       name: row.name,
       description: row.description,
       accessLevel: row.access_level,
-      trackCount: Number(row.track_count ?? 0),
+      datalogCount: Number(row.datalog_count ?? 0),
       readingCount: Number(row.reading_count ?? 0),
       createdAt: row.created_at,
       updatedAt: row.updated_at
@@ -101,7 +102,7 @@ export const createDatasetService = ({ db, audit }) => {
     const [tracksResult, sharesResult, excludeAreasResult, focusPointResult] = await Promise.all([
       db.query(
         `SELECT *
-         FROM tracks
+         FROM datalogs
          WHERE dataset_id = $1
          ORDER BY created_at DESC`,
         [datasetId]
@@ -125,8 +126,8 @@ export const createDatasetService = ({ db, audit }) => {
         `SELECT
            r.latitude,
            r.longitude
-         FROM tracks t
-         JOIN readings r ON r.track_id = t.id
+         FROM datalogs t
+         JOIN readings r ON r.datalog_id = t.id
          WHERE t.dataset_id = $1
            AND r.latitude IS NOT NULL
            AND r.longitude IS NOT NULL
@@ -145,13 +146,20 @@ export const createDatasetService = ({ db, audit }) => {
       accessLevel: dataset.access_level,
       createdAt: dataset.created_at,
       updatedAt: dataset.updated_at,
-      tracks: tracksResult.rows.map((row) => ({
+      datalogs: tracksResult.rows.map((row) => {
+        const supportedFields = normalizeSupportedFields({
+          value: row.supported_fields_json
+        });
+
+        return ({
         id: row.id,
         rawFileId: row.raw_file_id,
         sourceType: row.source_type,
-        ingestTrackId: row.ingest_track_id,
-        trackName: row.track_name,
+        ingestDatalogId: row.ingest_datalog_id,
+        datalogName: row.datalog_name,
         deviceIdentifierRaw: row.device_identifier_raw,
+        supportedFields,
+        metricFields: mergeMetricFields({ supportedFields }),
         rowCount: row.row_count,
         validRowCount: row.valid_row_count,
         warningCount: row.warning_count,
@@ -160,7 +168,8 @@ export const createDatasetService = ({ db, audit }) => {
         startedAt: row.started_at,
         endedAt: row.ended_at,
         createdAt: row.created_at
-      })),
+      });
+      }),
       shares: sharesResult.rows.map((row) => ({
         id: row.id,
         targetUserId: row.target_user_id,
@@ -189,6 +198,67 @@ export const createDatasetService = ({ db, audit }) => {
           }
         : null
     };
+  };
+
+  const listFieldInventory = async ({ user }) => {
+    const result = await db.query(
+      `SELECT
+         d.id AS dataset_id,
+         d.name AS dataset_name,
+         log.id AS datalog_id,
+         log.datalog_name,
+         log.supported_fields_json
+       FROM datasets d
+       JOIN datalogs log ON log.dataset_id = d.id
+       WHERE ${datasetWhereClause({ roleParamIndex: 1, userParamIndex: 2 })}
+       ORDER BY d.updated_at DESC, log.created_at DESC`,
+      [user.role, user.id]
+    );
+
+    const byPropKey = new Map();
+
+    for (const row of result.rows) {
+      for (const field of mergePopupFields({
+        supportedFields: row.supported_fields_json
+      })) {
+        const current = byPropKey.get(field.propKey) ?? {
+          propKey: field.propKey,
+          source: field.source,
+          valueType: field.valueType,
+          displayNames: new Set(),
+          datasetsById: new Map(),
+          datalogs: []
+        };
+
+        current.displayNames.add(field.displayName);
+        current.datasetsById.set(row.dataset_id, {
+          id: row.dataset_id,
+          name: row.dataset_name
+        });
+        current.datalogs.push({
+          id: row.datalog_id,
+          name: row.datalog_name,
+          datasetId: row.dataset_id,
+          datasetName: row.dataset_name,
+          displayName: field.displayName
+        });
+        byPropKey.set(field.propKey, current);
+      }
+    }
+
+    return [...byPropKey.values()]
+      .map((entry) => ({
+        propKey: entry.propKey,
+        source: entry.source,
+        valueType: entry.valueType,
+        displayNames: [...entry.displayNames].sort((left, right) => left.localeCompare(right)),
+        datasets: [...entry.datasetsById.values()].sort((left, right) => left.name.localeCompare(right.name)),
+        datalogs: entry.datalogs.sort((left, right) => (
+          left.datasetName.localeCompare(right.datasetName)
+          || String(left.name ?? '').localeCompare(String(right.name ?? ''))
+        ))
+      }))
+      .sort((left, right) => left.propKey.localeCompare(right.propKey));
   };
 
   const createDataset = async ({ user, name, description = null, correlationId = null }) => {
@@ -687,7 +757,7 @@ export const createDatasetService = ({ db, audit }) => {
     const result = await db.query(
       `SELECT r.id, d.id AS dataset_id, ${datasetAccessCase({ roleParamIndex: 2, userParamIndex: 3 })} AS access_level
        FROM readings r
-       JOIN tracks t ON t.id = r.track_id
+       JOIN datalogs t ON t.id = r.datalog_id
        JOIN datasets d ON d.id = t.dataset_id
        WHERE r.id = ANY($1::text[])`,
       [readingIds, user.role, user.id]
@@ -727,6 +797,7 @@ export const createDatasetService = ({ db, audit }) => {
 
   return {
     listDatasets,
+    listFieldInventory,
     getDatasetAccess,
     getDatasetDetail,
     createDataset,

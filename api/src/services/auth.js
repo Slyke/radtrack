@@ -112,6 +112,45 @@ export const createAuthService = ({ db, runtimeConfig, logger, audit }) => {
     return result.rows[0] ?? null;
   };
 
+  const getBootstrapAdminUser = async () => {
+    const result = await db.query(
+      `SELECT * FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`
+    );
+    return result.rows[0] ?? null;
+  };
+
+  const getDisableProtectionReason = ({ userId, bootstrapAdminUserId, identities = [] }) => {
+    if (bootstrapAdminUserId && userId === bootstrapAdminUserId) {
+      return 'bootstrap_admin';
+    }
+
+    if (identities.some((identity) => identity.providerType === 'oidc' || identity.providerType === 'header')) {
+      return 'external_auth';
+    }
+
+    return null;
+  };
+
+  const getUserDisableProtectionReason = async ({ userId }) => {
+    const [bootstrapAdmin, identitiesResult] = await Promise.all([
+      getBootstrapAdminUser(),
+      db.query(
+        `SELECT provider_type
+         FROM auth_identities
+         WHERE user_id = $1`,
+        [userId]
+      )
+    ]);
+
+    return getDisableProtectionReason({
+      userId,
+      bootstrapAdminUserId: bootstrapAdmin?.id ?? null,
+      identities: identitiesResult.rows.map((row) => ({
+        providerType: row.provider_type
+      }))
+    });
+  };
+
   const getIdentity = async ({ providerType, subject }) => {
     const result = await db.query(
       `SELECT ai.*, u.username, u.role, u.password_hash, u.must_change_password, u.is_disabled, u.created_at, u.updated_at
@@ -200,10 +239,7 @@ export const createAuthService = ({ db, runtimeConfig, logger, audit }) => {
   };
 
   const bootstrapAdmin = async ({ correlationId = null }) => {
-    const existingAdminResult = await db.query(
-      `SELECT * FROM users WHERE role = 'admin' ORDER BY created_at ASC LIMIT 1`
-    );
-    const existingAdmin = existingAdminResult.rows[0] ?? null;
+    const existingAdmin = await getBootstrapAdminUser();
     const bootstrapUsername = normalizeUsername({
       username: runtimeConfig.bootstrapAdmin.username || 'admin'
     }) || 'admin';
@@ -217,6 +253,16 @@ export const createAuthService = ({ db, runtimeConfig, logger, audit }) => {
     });
 
     if (existingAdmin && !runtimeConfig.resetAdminPassword) {
+      if (existingAdmin.is_disabled) {
+        await db.query(
+          `UPDATE users
+           SET is_disabled = FALSE,
+               updated_at = $2
+           WHERE id = $1`,
+          [existingAdmin.id, new Date().toISOString()]
+        );
+      }
+
       return;
     }
 
@@ -707,9 +753,18 @@ export const createAuthService = ({ db, runtimeConfig, logger, audit }) => {
       identitiesByUser.set(row.user_id, current);
     }
 
+    const bootstrapAdminUserId = usersResult.rows
+      .filter((row) => row.role === 'admin')
+      .sort((left, right) => Date.parse(left.created_at) - Date.parse(right.created_at))[0]?.id ?? null;
+
     return usersResult.rows.map((row) => ({
       ...safeUser({ row }),
-      identities: identitiesByUser.get(row.id) ?? []
+      identities: identitiesByUser.get(row.id) ?? [],
+      disableProtectionReason: getDisableProtectionReason({
+        userId: row.id,
+        bootstrapAdminUserId,
+        identities: identitiesByUser.get(row.id) ?? []
+      })
     }));
   };
 
@@ -765,6 +820,29 @@ export const createAuthService = ({ db, runtimeConfig, logger, audit }) => {
         correlationId,
         status: 404
       });
+    }
+
+    if (isDisabled === true) {
+      const disableProtectionReason = await getUserDisableProtectionReason({ userId });
+      if (disableProtectionReason === 'bootstrap_admin') {
+        throw createAppError({
+          caller: 'auth::updateUser',
+          reason: 'Bootstrap admin cannot be disabled.',
+          errorKey: 'AUTH_FORBIDDEN',
+          correlationId,
+          status: 403
+        });
+      }
+
+      if (disableProtectionReason === 'external_auth') {
+        throw createAppError({
+          caller: 'auth::updateUser',
+          reason: 'Users with OIDC or header identities cannot be disabled.',
+          errorKey: 'AUTH_FORBIDDEN',
+          correlationId,
+          status: 403
+        });
+      }
     }
 
     await db.query(

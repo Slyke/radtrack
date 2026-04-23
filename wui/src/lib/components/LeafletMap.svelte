@@ -3,6 +3,12 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   import 'leaflet/dist/leaflet.css';
+  import {
+    aggregateDataCountPropKey,
+    getAggregateTimeBasePropKey,
+    isAggregateTimePropKey,
+    normalizePropKey
+  } from '$lib/datalog-fields';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
 
   type AggregateStats = {
@@ -15,12 +21,7 @@
   };
 
   type PopupFields = {
-    time: boolean;
-    count: boolean;
-    doseRate: boolean;
-    countRate: boolean;
-    accuracy: boolean;
-    temperatureC: boolean;
+    metrics: Record<string, boolean>;
   };
 
   type ColorScale = {
@@ -32,15 +33,25 @@
   type MapPoint = {
     id: string;
     datasetId: string;
+    datalogId: string;
+    rawTimestamp?: string | null;
+    parsedTimeText?: string | null;
     latitude: number;
     longitude: number;
-    doseRate: number | null;
-    countRate: number | null;
+    altitudeMeters: number | null;
     accuracy: number | null;
-    temperatureC?: number | null;
+    measurements: Record<string, number>;
+    deviceId?: string | null;
+    deviceName?: string | null;
+    deviceType?: string | null;
+    deviceCalibration?: string | null;
+    firmwareVersion?: string | null;
+    sourceReadingId?: string | null;
     comment: string | null;
+    custom?: string | null;
     occurredAt: string | null;
     receivedAt?: string | null;
+    extra?: Record<string, unknown>;
   };
 
   type AggregateCell = {
@@ -56,12 +67,19 @@
       end: string | null;
     };
     stats: AggregateStats;
-    metrics: {
-      doseRate: AggregateStats;
-      countRate: AggregateStats;
-      accuracy: AggregateStats;
-      temperatureC: AggregateStats;
+    metrics: Record<string, AggregateStats>;
+    dataValues: Record<string, string[]>;
+    cache?: {
+      hit: boolean;
+      key: string;
+      source: 'cache' | 'computed';
+      ttlSecondsRemaining: number | null;
     };
+  };
+
+  type ActivePopup = {
+    mode: 'raw' | 'aggregate';
+    id: string;
   };
 
   interface Props {
@@ -72,6 +90,8 @@
     aggregateStat?: string;
     colorScale?: ColorScale | null;
     popupFields?: PopupFields;
+    metricLabels?: Record<string, string>;
+    metricValueTypes?: Record<string, 'number' | 'time' | 'string'>;
     tileUrlTemplate?: string;
     attribution?: string;
   }
@@ -84,13 +104,10 @@
     aggregateStat = 'mean',
     colorScale = null,
     popupFields = {
-      time: true,
-      count: true,
-      doseRate: true,
-      countRate: true,
-      accuracy: true,
-      temperatureC: true
+      metrics: {}
     },
+    metricLabels = {},
+    metricValueTypes = {},
     tileUrlTemplate = '',
     attribution = ''
   }: Props = $props();
@@ -117,7 +134,8 @@
   const worldWidthDegrees = 360;
   const resetToPrimaryWorldMaxZoom = 2;
   const numberFormatter = () => new Intl.NumberFormat($localeStore.language, {
-    maximumFractionDigits: 4
+    useGrouping: false,
+    maximumFractionDigits: 5
   });
 
   const toRadians = (value: number) => (value * Math.PI) / 180;
@@ -167,7 +185,20 @@
   let tileLayer: import('leaflet').TileLayer | null = null;
   let resizeObserver: ResizeObserver | null = null;
   let activeTileLayerSignature = '';
+  let activePopup: ActivePopup | null = null;
+  let preservePopupState = false;
   const overlayPane = 'data-overlay';
+
+  const updatePopupLayoutVars = () => {
+    if (!container) {
+      return;
+    }
+
+    container.style.setProperty(
+      '--map-popup-max-height',
+      `${Math.max(240, Math.floor(container.clientHeight / 2))}px`
+    );
+  };
 
   const escapeHtml = (value: string) => value
     .replaceAll('&', '&amp;')
@@ -189,6 +220,143 @@
     }
 
     return numberFormatter().format(value);
+  };
+
+  const formatTimestampValue = (value: number | string | null | undefined) => {
+    if (value === null || value === undefined) {
+      return t('radtrack-common_na-label');
+    }
+
+    if (typeof value === 'number') {
+      return formatTimestamp(new Date(value).toISOString());
+    }
+
+    return formatTimestamp(value);
+  };
+
+  const formatMetricValue = ({
+    metricKey,
+    value
+  }: {
+    metricKey: string;
+    value: number | string | null | undefined;
+  }) => (
+    metricValueTypes[metricKey] === 'time'
+      ? formatTimestampValue(value)
+      : (
+        metricValueTypes[metricKey] === 'string'
+          ? (value === null || value === undefined || value === '' ? t('radtrack-common_na-label') : String(value))
+          : formatNumber(typeof value === 'string' ? Number(value) : value)
+      )
+  );
+
+  const getMetricLabel = (metricKey: string) => metricLabels[metricKey] ?? metricKey;
+
+  const coercePopupString = (value: unknown) => {
+    if (value === null || value === undefined || value === '') {
+      return null;
+    }
+
+    if (typeof value === 'string') {
+      return value.trim() || null;
+    }
+
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+
+    return null;
+  };
+
+  const resolveExtraValue = ({
+    extra,
+    metricKey
+  }: {
+    extra: Record<string, unknown> | null | undefined;
+    metricKey: string;
+  }) => {
+    if (!extra) {
+      return null;
+    }
+
+    if (metricKey in extra) {
+      return extra[metricKey];
+    }
+
+    for (const [rawKey, rawValue] of Object.entries(extra)) {
+      if (
+        rawKey === metricKey
+        || rawKey.toLowerCase() === metricKey.toLowerCase()
+        || normalizePropKey(rawKey) === metricKey
+      ) {
+        return rawValue;
+      }
+    }
+
+    return null;
+  };
+
+  const getPointMetricValue = ({ point, metricKey }: { point: MapPoint; metricKey: string }) => {
+    switch (metricKey) {
+      case 'occurredAt': {
+        const timestamp = point.occurredAt ?? point.receivedAt;
+        return timestamp ? Date.parse(timestamp) : null;
+      }
+      case 'latitude':
+        return point.latitude;
+      case 'longitude':
+        return point.longitude;
+      case 'altitudeMeters':
+        return point.altitudeMeters;
+      case 'accuracy':
+        return point.accuracy;
+      case 'deviceId':
+        return point.deviceId ?? null;
+      case 'deviceName':
+        return point.deviceName ?? null;
+      case 'deviceType':
+        return point.deviceType ?? null;
+      case 'deviceCalibration':
+        return point.deviceCalibration ?? null;
+      case 'firmwareVersion':
+        return point.firmwareVersion ?? null;
+      case 'sourceReadingId':
+        return point.sourceReadingId ?? null;
+      case 'comment':
+        return point.comment ?? null;
+      case 'custom':
+        return point.custom ?? null;
+      case 'rawTimestamp':
+        return point.rawTimestamp ?? null;
+      case 'parsedTimeText':
+        return point.parsedTimeText ?? null;
+      default:
+        return point.measurements?.[metricKey] ?? resolveExtraValue({
+          extra: point.extra,
+          metricKey
+        }) ?? null;
+    }
+  };
+
+  const getAggregateSyntheticValues = ({
+    metricKey,
+    cell
+  }: {
+    metricKey: string;
+    cell: AggregateCell;
+  }) => {
+    switch (metricKey) {
+      case 'radtrackCacheKey':
+        return cell.cache?.key ? [cell.cache.key] : [];
+      case 'radtrackCacheSource':
+        return cell.cache?.source ? [cell.cache.source] : [];
+      case 'radtrackCacheTtlSeconds':
+        return cell.cache?.ttlSecondsRemaining === null || cell.cache?.ttlSecondsRemaining === undefined
+          ? []
+          : [String(cell.cache.ttlSecondsRemaining)];
+      default:
+        return [];
+    }
   };
 
   const mixHexColors = ({
@@ -303,21 +471,55 @@
   };
 
   const buildAggregateMetricRows = ({
+    metricKey,
     stats
   }: {
-    stats: AggregateStats;
+    metricKey: string;
+    stats: AggregateStats | null | undefined;
   }) => {
-    if (!stats.count) {
+    if (!stats?.count) {
       return null;
     }
 
     return [
-      { label: t('radtrack-common_mean-label'), value: formatNumber(stats.mean) },
-      { label: t('radtrack-common_min-label'), value: formatNumber(stats.min) },
-      { label: t('radtrack-common_max-label'), value: formatNumber(stats.max) },
-      { label: t('radtrack-common_median-label'), value: formatNumber(stats.median) },
-      { label: t('radtrack-common_mode-label'), value: formatNumber(stats.mode) }
+      { label: t('radtrack-common_mean-label'), value: formatMetricValue({ metricKey, value: stats.mean }) },
+      { label: t('radtrack-common_min-label'), value: formatMetricValue({ metricKey, value: stats.min }) },
+      { label: t('radtrack-common_max-label'), value: formatMetricValue({ metricKey, value: stats.max }) },
+      { label: t('radtrack-common_median-label'), value: formatMetricValue({ metricKey, value: stats.median }) },
+      { label: t('radtrack-common_mode-label'), value: formatMetricValue({ metricKey, value: stats.mode }) }
     ];
+  };
+
+  const buildAggregateTimeValueRows = ({
+    metricKey,
+    cell
+  }: {
+    metricKey: string;
+    cell: AggregateCell;
+  }) => {
+    const metricStats = cell.metrics[metricKey];
+    const startValue = metricKey === 'occurredAt'
+      ? (cell.timeRange.start ?? metricStats?.min ?? null)
+      : (metricStats?.min ?? null);
+    const endValue = metricKey === 'occurredAt'
+      ? (cell.timeRange.end ?? metricStats?.max ?? null)
+      : (metricStats?.max ?? null);
+
+    if (startValue === null && endValue === null) {
+      return null;
+    }
+
+    if (startValue !== null && endValue !== null && String(startValue) !== String(endValue)) {
+      return [
+        { label: t('radtrack-common_min-label'), value: formatMetricValue({ metricKey, value: startValue }) },
+        { label: t('radtrack-common_max-label'), value: formatMetricValue({ metricKey, value: endValue }) }
+      ];
+    }
+
+    return [{
+      label: t('radtrack-common_value-label'),
+      value: formatMetricValue({ metricKey, value: startValue ?? endValue })
+    }];
   };
 
   const buildAggregateTimeRange = ({
@@ -350,11 +552,13 @@
   `;
 
   const buildPopupMetricTableHtml = ({
+    metricKey,
     rows
   }: {
+    metricKey: string;
     rows: Array<{ label: string; value: string }>;
   }) => `
-    <table class="map-popup-table">
+    <table class="map-popup-table${metricValueTypes[metricKey] === 'time' ? ' is-timestamp-table' : ''}">
       <thead>
         <tr>
           ${rows.map((row) => `<th>${escapeHtml(row.label)}</th>`).join('')}
@@ -362,10 +566,24 @@
       </thead>
       <tbody>
         <tr>
-          ${rows.map((row) => `<td>${escapeHtml(row.value)}</td>`).join('')}
+          ${rows.map((row) => (
+            metricValueTypes[metricKey] === 'time'
+              ? `<td><div class="map-popup-cell-scroll" tabindex="0" title="${escapeHtml(row.value)}">${escapeHtml(row.value)}</div></td>`
+              : `<td>${escapeHtml(row.value)}</td>`
+          )).join('')}
         </tr>
       </tbody>
     </table>
+  `;
+
+  const buildPopupValueListHtml = ({
+    values
+  }: {
+    values: string[];
+  }) => `
+    <div class="map-popup-value-list">
+      ${values.map((value) => `<code class="map-popup-value-chip" title="${escapeHtml(value)}">${escapeHtml(value)}</code>`).join('')}
+    </div>
   `;
 
   const buildPopupSectionHtml = ({
@@ -405,41 +623,30 @@
     </div>
   `;
 
+  const getAggregatePopupSectionPriority = ({ metricKey }: { metricKey: string }) => (
+    metricValueTypes[metricKey] === 'time' || isAggregateTimePropKey(metricKey)
+      ? 0
+      : 1
+  );
+
   const buildRawPopupHtml = ({ point }: { point: MapPoint }) => {
     const rows: string[] = [];
 
-    if (popupFields.time) {
-      rows.push(buildPopupDataRowHtml({
-        label: t('radtrack-common_time-label'),
-        value: formatTimestamp(point.occurredAt ?? point.receivedAt)
-      }));
-    }
+    for (const [metricKey, enabled] of Object.entries(popupFields.metrics)) {
+      if (!enabled) {
+        continue;
+      }
 
-    if (popupFields.doseRate && point.doseRate !== null && point.doseRate !== undefined) {
-      rows.push(buildPopupDataRowHtml({
-        label: t('radtrack-common_dose_rate-label'),
-        value: formatNumber(point.doseRate)
-      }));
-    }
+      const metricValue = getPointMetricValue({ point, metricKey });
+      if (metricValue === null || metricValue === undefined) {
+        continue;
+      }
 
-    if (popupFields.countRate && point.countRate !== null && point.countRate !== undefined) {
       rows.push(buildPopupDataRowHtml({
-        label: t('radtrack-common_count_rate-label'),
-        value: formatNumber(point.countRate)
-      }));
-    }
-
-    if (popupFields.accuracy && point.accuracy !== null && point.accuracy !== undefined) {
-      rows.push(buildPopupDataRowHtml({
-        label: t('radtrack-common_accuracy-label'),
-        value: formatNumber(point.accuracy)
-      }));
-    }
-
-    if (popupFields.temperatureC && point.temperatureC !== null && point.temperatureC !== undefined) {
-      rows.push(buildPopupDataRowHtml({
-        label: t('radtrack-common_temperature-label'),
-        value: formatNumber(point.temperatureC)
+        label: getMetricLabel(metricKey),
+        value: metricValueTypes[metricKey] === 'string'
+          ? (coercePopupString(metricValue) ?? t('radtrack-common_na-label'))
+          : formatMetricValue({ metricKey, value: metricValue })
       }));
     }
 
@@ -448,65 +655,116 @@
         ${buildPopupHeaderHtml({
           title: t('radtrack-map_popup_reading-title')
         })}
-        ${rows.length ? `<div class="map-popup-data-list">${rows.join('')}</div>` : ''}
-        ${point.comment ? `
-          <section class="map-popup-section">
-            <div class="map-popup-section-title">${escapeHtml(t('radtrack-common_comment-label'))}</div>
-            <div class="map-popup-note">${escapeHtml(point.comment)}</div>
-          </section>
+        ${(rows.length || point.comment) ? `
+          <div class="map-popup-scroll">
+            ${rows.length ? `<div class="map-popup-data-list">${rows.join('')}</div>` : ''}
+            ${point.comment ? `
+              <section class="map-popup-section">
+                <div class="map-popup-section-title">${escapeHtml(t('radtrack-common_comment-label'))}</div>
+                <div class="map-popup-note">${escapeHtml(point.comment)}</div>
+              </section>
+            ` : ''}
+          </div>
         ` : ''}
       </div>
     `;
   };
 
   const buildAggregatePopupHtml = ({ cell }: { cell: AggregateCell }) => {
-    const sections: string[] = [];
-    const badge = popupFields.count
-      ? `${formatNumber(cell.pointCount)} ${t('radtrack-map_popup_points-label')}`
-      : null;
-    const timeRange = popupFields.time
+    const sections: Array<{ html: string; priority: number }> = [];
+    const timeRange = popupFields.metrics.occurredAt
       ? buildAggregateTimeRange({ timeRange: cell.timeRange })
       : null;
+    const badge = popupFields.metrics[aggregateDataCountPropKey]
+      ? `${formatNumber(cell.pointCount)} ${t('radtrack-map_popup_points-label')}`
+      : null;
 
-    if (popupFields.doseRate) {
-      const rows = buildAggregateMetricRows({ stats: cell.metrics.doseRate });
+    for (const [metricKey, enabled] of Object.entries(popupFields.metrics)) {
+      if (!enabled || metricKey === aggregateDataCountPropKey || metricKey === 'occurredAt') {
+        continue;
+      }
+
+      const aggregateTimeBasePropKey = getAggregateTimeBasePropKey(metricKey);
+      if (aggregateTimeBasePropKey) {
+        const rows = buildAggregateMetricRows({
+          metricKey: aggregateTimeBasePropKey,
+          stats: cell.metrics[aggregateTimeBasePropKey]
+        });
+        if (rows) {
+          sections.push({
+            html: buildPopupSectionHtml({
+              title: getMetricLabel(metricKey),
+              body: buildPopupMetricTableHtml({
+                metricKey,
+                rows
+              })
+            }),
+            priority: getAggregatePopupSectionPriority({ metricKey })
+          });
+        }
+        continue;
+      }
+
+      if (metricValueTypes[metricKey] === 'string') {
+        const values = [
+          ...(cell.dataValues?.[metricKey] ?? []),
+          ...getAggregateSyntheticValues({ metricKey, cell })
+        ];
+        if (values.length) {
+          sections.push({
+            html: buildPopupSectionHtml({
+              title: getMetricLabel(metricKey),
+              body: buildPopupValueListHtml({
+                values: [...new Set(values)]
+              })
+            }),
+            priority: getAggregatePopupSectionPriority({ metricKey })
+          });
+        }
+        continue;
+      }
+
+      if (metricValueTypes[metricKey] === 'time' && !isAggregateTimePropKey(metricKey)) {
+        const rows = buildAggregateTimeValueRows({
+          metricKey,
+          cell
+        });
+        if (rows) {
+          sections.push({
+            html: buildPopupSectionHtml({
+              title: getMetricLabel(metricKey),
+              body: buildPopupMetricTableHtml({
+                metricKey,
+                rows
+              })
+            }),
+            priority: getAggregatePopupSectionPriority({ metricKey })
+          });
+        }
+        continue;
+      }
+
+      const rows = buildAggregateMetricRows({
+        metricKey,
+        stats: cell.metrics[metricKey]
+      });
       if (rows) {
-        sections.push(buildPopupSectionHtml({
-          title: t('radtrack-common_dose_rate-label'),
-          body: buildPopupMetricTableHtml({ rows })
-        }));
+        sections.push({
+          html: buildPopupSectionHtml({
+            title: getMetricLabel(metricKey),
+            body: buildPopupMetricTableHtml({
+              metricKey,
+              rows
+            })
+          }),
+          priority: getAggregatePopupSectionPriority({ metricKey })
+        });
       }
     }
 
-    if (popupFields.countRate) {
-      const rows = buildAggregateMetricRows({ stats: cell.metrics.countRate });
-      if (rows) {
-        sections.push(buildPopupSectionHtml({
-          title: t('radtrack-common_count_rate-label'),
-          body: buildPopupMetricTableHtml({ rows })
-        }));
-      }
-    }
-
-    if (popupFields.accuracy) {
-      const rows = buildAggregateMetricRows({ stats: cell.metrics.accuracy });
-      if (rows) {
-        sections.push(buildPopupSectionHtml({
-          title: t('radtrack-common_accuracy-label'),
-          body: buildPopupMetricTableHtml({ rows })
-        }));
-      }
-    }
-
-    if (popupFields.temperatureC) {
-      const rows = buildAggregateMetricRows({ stats: cell.metrics.temperatureC });
-      if (rows) {
-        sections.push(buildPopupSectionHtml({
-          title: t('radtrack-common_temperature-label'),
-          body: buildPopupMetricTableHtml({ rows })
-        }));
-      }
-    }
+    const orderedSections = sections
+      .sort((left, right) => left.priority - right.priority)
+      .map((section) => section.html);
 
     return `
       <div class="map-popup">
@@ -515,7 +773,7 @@
           subtitle: timeRange,
           badge
         })}
-        ${sections.join('')}
+        ${orderedSections.length ? `<div class="map-popup-scroll">${orderedSections.join('')}</div>` : ''}
       </div>
     `;
   };
@@ -550,6 +808,33 @@
     }
 
     return offsets.length ? offsets : [0];
+  };
+
+  const trackPopupLayer = ({
+    layer,
+    mode,
+    id
+  }: {
+    layer: {
+      on: (event: string, handler: () => void) => void;
+      openPopup: () => void;
+    };
+    mode: 'raw' | 'aggregate';
+    id: string;
+  }) => {
+    layer.on('popupopen', () => {
+      activePopup = { mode, id };
+    });
+
+    layer.on('popupclose', () => {
+      if (preservePopupState) {
+        return;
+      }
+
+      if (activePopup?.mode === mode && activePopup.id === id) {
+        activePopup = null;
+      }
+    });
   };
 
   const rerenderCurrentView = () => render({
@@ -603,12 +888,18 @@
       return;
     }
 
+    const popupToRestore = activePopup;
+    let restoreLayer: { openPopup: () => void } | null = null;
+    let restoreLayerDistance = Number.POSITIVE_INFINITY;
+
+    preservePopupState = true;
     overlayLayer.clearLayers();
+    preservePopupState = false;
     const popupOptions = {
       autoPan: false,
       closeButton: true,
-      maxWidth: 520,
-      minWidth: 380
+      maxWidth: 760,
+      minWidth: 560
     };
 
     if (currentMode === 'raw') {
@@ -627,12 +918,28 @@
             fillOpacity: 0.55
           });
           marker.bindPopup(buildRawPopupHtml({ point }), popupOptions);
+          trackPopupLayer({
+            layer: marker,
+            mode: 'raw',
+            id: point.id
+          });
           marker.on('click', () => {
             dispatch('selectpoint', point);
           });
+          if (popupToRestore?.mode === 'raw' && popupToRestore.id === point.id) {
+            const longitudeDistance = Math.abs((point.longitude + longitudeOffset) - map.getCenter().lng);
+            if (longitudeDistance < restoreLayerDistance) {
+              restoreLayer = marker;
+              restoreLayerDistance = longitudeDistance;
+            }
+          }
           overlayLayer.addLayer(marker);
         }
       }
+      if (popupToRestore && !restoreLayer) {
+        activePopup = null;
+      }
+      restoreLayer?.openPopup();
       return;
     }
 
@@ -658,6 +965,18 @@
             weight: 1.5
           });
           layer.bindPopup(popupHtml, popupOptions);
+          trackPopupLayer({
+            layer,
+            mode: 'aggregate',
+            id: cell.id
+          });
+          if (popupToRestore?.mode === 'aggregate' && popupToRestore.id === cell.id) {
+            const longitudeDistance = Math.abs(center.longitude - map.getCenter().lng);
+            if (longitudeDistance < restoreLayerDistance) {
+              restoreLayer = layer;
+              restoreLayerDistance = longitudeDistance;
+            }
+          }
           overlayLayer.addLayer(layer);
           continue;
         }
@@ -678,6 +997,18 @@
             }
           );
           layer.bindPopup(popupHtml, popupOptions);
+          trackPopupLayer({
+            layer,
+            mode: 'aggregate',
+            id: cell.id
+          });
+          if (popupToRestore?.mode === 'aggregate' && popupToRestore.id === cell.id) {
+            const longitudeDistance = Math.abs(center.longitude - map.getCenter().lng);
+            if (longitudeDistance < restoreLayerDistance) {
+              restoreLayer = layer;
+              restoreLayerDistance = longitudeDistance;
+            }
+          }
           overlayLayer.addLayer(layer);
           continue;
         }
@@ -694,9 +1025,26 @@
           weight: 1.5
         });
         layer.bindPopup(popupHtml, popupOptions);
+        trackPopupLayer({
+          layer,
+          mode: 'aggregate',
+          id: cell.id
+        });
+        if (popupToRestore?.mode === 'aggregate' && popupToRestore.id === cell.id) {
+          const longitudeDistance = Math.abs(center.longitude - map.getCenter().lng);
+          if (longitudeDistance < restoreLayerDistance) {
+            restoreLayer = layer;
+            restoreLayerDistance = longitudeDistance;
+          }
+        }
         overlayLayer.addLayer(layer);
       }
     }
+
+    if (popupToRestore && !restoreLayer) {
+      activePopup = null;
+    }
+    restoreLayer?.openPopup();
   };
 
   const ensureTileLayer = ({
@@ -745,12 +1093,14 @@
     });
     overlayLayer = leaflet.layerGroup().addTo(map);
     resizeObserver = new ResizeObserver(() => {
+      updatePopupLayoutVars();
       map?.invalidateSize();
     });
     resizeObserver.observe(container);
 
     map.on('moveend', handleMoveEnd);
     requestAnimationFrame(() => {
+      updatePopupLayoutVars();
       map?.invalidateSize();
     });
     handleMoveEnd();
@@ -805,8 +1155,10 @@
 
   .map-container :global(.leaflet-popup-content) {
     margin: 0;
-    min-width: 22rem;
-    max-width: 32rem;
+    min-width: 30rem;
+    max-width: 46rem;
+    max-height: var(--map-popup-max-height, 50vh);
+    overflow: hidden;
     padding: 1rem 1.05rem;
   }
 
@@ -817,7 +1169,19 @@
 
   .map-container :global(.map-popup) {
     display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
     gap: 0.7rem;
+    max-height: calc(var(--map-popup-max-height, 50vh) - 2rem);
+    min-height: 0;
+  }
+
+  .map-container :global(.map-popup-scroll) {
+    display: grid;
+    gap: 0.7rem;
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 0.15rem;
+    scrollbar-gutter: stable;
   }
 
   .map-container :global(.map-popup-header) {
@@ -897,7 +1261,7 @@
     width: 100%;
     table-layout: fixed;
     border-collapse: separate;
-    border-spacing: 0.32rem 0;
+    border-spacing: 0.38rem 0;
   }
 
   .map-container :global(.map-popup-table th),
@@ -905,6 +1269,7 @@
     text-align: left;
     padding: 0;
     border: none;
+    width: 20%;
   }
 
   .map-container :global(.map-popup-table th) {
@@ -920,8 +1285,52 @@
     border: 1px solid var(--color-border);
     border-radius: 0.6rem;
     background: var(--color-panel-strong);
-    font-size: 0.92rem;
+    font-size: 0.88rem;
     font-weight: 700;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .map-container :global(.map-popup-table.is-timestamp-table td) {
+    padding: 0.34rem 0.4rem;
+  }
+
+  .map-container :global(.map-popup-value-list) {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.38rem;
+  }
+
+  .map-container :global(.map-popup-value-chip) {
+    display: inline-block;
+    max-width: 100%;
+    padding: 0.32rem 0.44rem;
+    border-radius: 0.5rem;
+    border: 1px solid var(--color-border);
+    background: var(--color-panel-strong);
+    color: var(--color-text);
+    font-size: 0.8rem;
+    overflow-wrap: anywhere;
+  }
+
+  .map-container :global(.map-popup-cell-scroll) {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    user-select: text;
+    cursor: text;
+    scrollbar-width: thin;
+  }
+
+  .map-container :global(.map-popup-cell-scroll:hover),
+  .map-container :global(.map-popup-cell-scroll:focus) {
+    overflow-x: auto;
+    overflow-y: hidden;
+    text-overflow: clip;
+    outline: none;
   }
 
   .map-container :global(.map-popup-note) {

@@ -15,11 +15,14 @@
 
   const navigation = [
     { href: '/dashboard', labelKey: 'radtrack-layout_nav-dashboard-label' },
-    { href: '/import', labelKey: 'radtrack-layout_nav-import-label' },
+    {
+      href: '/import-export',
+      labelKey: 'radtrack-layout_nav-import_export-label',
+      activePrefixes: ['/import-export', '/import/', '/export/']
+    },
     { href: '/datasets', labelKey: 'radtrack-layout_nav-datasets-label' },
     { href: '/map', labelKey: 'radtrack-layout_nav-map-label' },
     { href: '/combined', labelKey: 'radtrack-layout_nav-combined-label' },
-    { href: '/export', labelKey: 'radtrack-layout_nav-export-label' },
     { href: '/audit', labelKey: 'radtrack-layout_nav-audit-label' },
     { href: '/users', labelKey: 'radtrack-layout_nav-users-label', roles: ['moderator', 'admin'] },
     { href: '/settings', labelKey: 'radtrack-layout_nav-settings-label', roles: ['admin'] }
@@ -47,6 +50,16 @@
 
   const isLoginRoute = $derived($page.url.pathname === '/login');
   const isMapRoute = $derived($page.url.pathname === '/map');
+  const isDatasetsRoute = $derived(
+    $page.url.pathname === '/datasets'
+    || $page.url.pathname.startsWith('/datasets/')
+  );
+  const isImportExportRoute = $derived(
+    $page.url.pathname === '/import-export'
+    || $page.url.pathname.startsWith('/import/')
+    || $page.url.pathname.startsWith('/export/')
+  );
+  const isDatalogRoute = $derived($page.url.pathname.startsWith('/datalogs/'));
 
   const requiresPasswordReset = $derived(
     $sessionStore.authenticated
@@ -54,8 +67,20 @@
   );
 
   const showShell = $derived(
-    $sessionStore.authenticated
+    $sessionStore.loaded
+    && $sessionStore.authenticated
     && !requiresPasswordReset
+    && !isAuthRoute
+  );
+
+  const sessionBootstrapping = $derived(
+    !$sessionStore.loaded
+    && !isAuthRoute
+  );
+
+  const redirectingToLogin = $derived(
+    $sessionStore.loaded
+    && !$sessionStore.authenticated
     && !isAuthRoute
   );
 
@@ -80,12 +105,19 @@
     window.localStorage.setItem(sidebarStorageKey, String(sidebarOpen));
   };
 
-  const isActive = (href: string) => (
-    $page.url.pathname === href
-    || (
-      href !== '/dashboard'
-      && $page.url.pathname.startsWith(`${href}/`)
-    )
+  const isActive = (entry: { href: string; activePrefixes?: string[] }) => (
+    entry.activePrefixes
+      ? entry.activePrefixes.some((prefix) => (
+          $page.url.pathname === prefix
+          || $page.url.pathname.startsWith(prefix)
+        ))
+      : (
+          $page.url.pathname === entry.href
+          || (
+            entry.href !== '/dashboard'
+            && $page.url.pathname.startsWith(`${entry.href}/`)
+          )
+        )
   );
 
   const applyUi = () => {
@@ -186,6 +218,18 @@
       <p class="muted">{bootstrapError}</p>
     </section>
   </main>
+{:else if sessionBootstrapping}
+  <main class="content wide">
+    <section class="panel">
+      <p class="muted">{t('radtrack-common_loading-label')}</p>
+    </section>
+  </main>
+{:else if redirectingToLogin}
+  <main class="content wide">
+    <section class="panel">
+      <p class="muted">{t('radtrack-common_redirecting')}</p>
+    </section>
+  </main>
 {:else if showShell}
   <div class:sidebar-collapsed={!sidebarOpen} class="shell">
     <aside class="sidebar-shell">
@@ -214,7 +258,7 @@
         <nav class="nav-list">
           {#each visibleNavigation as item}
             <a
-              class:active={isActive(item.href)}
+              class:active={isActive(item)}
               class="nav-link"
               href={item.href}
             >
@@ -245,7 +289,13 @@
       </button>
     {/if}
 
-    <main class:map-content={isMapRoute} class="content wide">
+    <main
+      class:datalog-content={isDatalogRoute}
+      class:datasets-content={isDatasetsRoute}
+      class:import-export-content={isImportExportRoute}
+      class:map-content={isMapRoute}
+      class="content wide"
+    >
       {@render children()}
     </main>
   </div>

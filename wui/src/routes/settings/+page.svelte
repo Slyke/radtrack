@@ -8,7 +8,7 @@
 
   let bootstrapInfo = $state<any>(null);
   let settings = $state<any[]>([]);
-  let updatesJson = $state('{\n  "map.defaultMetric": "dose_rate"\n}');
+  let updatesJson = $state('{\n  "map.defaultMetric": "doseRate"\n}');
   let errorMessage = $state<string | null>(null);
 
   const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
