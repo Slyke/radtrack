@@ -123,6 +123,8 @@
   };
 
   type MapViewport = {
+    centerLat: number;
+    centerLon: number;
     minLat: number;
     maxLat: number;
     minLon: number;
@@ -130,9 +132,18 @@
     zoom: number;
   };
 
+  type MapFocus = {
+    latitude: number;
+    longitude: number;
+    zoom: number;
+    key: string;
+  };
+
   type TimeFilterMode = 'none' | 'absolute' | 'relative';
   type TimeFilterPrecision = 'date' | 'datetime';
   type TimeFilterRelativeUnit = 'hours' | 'days';
+  type SidebarSize = 'small' | 'large';
+  type UrlSelectionMode = 'explicit' | 'none' | 'all' | 'default';
 
   type MapFilters = {
     datasetIds: string[];
@@ -191,6 +202,29 @@
   const autoUpdateStorageKeyPrefix = 'radtrack.map.auto-update';
   const autoCellSizeStorageKeyPrefix = 'radtrack.map.auto-cell-size';
   const basemapStorageKeyPrefix = 'radtrack.map.basemap';
+  const filterUrlParamName = 'filters';
+  const mapLatUrlParamName = 'lat';
+  const mapLonUrlParamName = 'lon';
+  const mapZoomUrlParamName = 'z';
+  const sidebarSizeStorageKeyPrefix = 'radtrack.map.sidebar-size';
+  const userLocationZoom = 11;
+  const firstDataPointZoom = 13;
+  const sidebarSizeOptions: {
+    key: SidebarSize;
+    width: string;
+    titleKey: string;
+  }[] = [
+    {
+      key: 'small',
+      width: '27.5rem',
+      titleKey: 'radtrack-map_sidebar_size_small-label'
+    },
+    {
+      key: 'large',
+      width: '35rem',
+      titleKey: 'radtrack-map_sidebar_size_large-label'
+    }
+  ];
   const autoCellSizeByZoom = [
     { zoom: 5, size: 20000 },
     { zoom: 6, size: 15000 },
@@ -206,6 +240,8 @@
   ];
 
   const createInitialViewport = (): MapViewport => ({
+    centerLat: 41.9,
+    centerLon: -87.7,
     minLat: 41.7,
     maxLat: 42.1,
     minLon: -88.0,
@@ -251,6 +287,8 @@
   });
 
   const cloneViewport = (source: MapViewport): MapViewport => ({
+    centerLat: source.centerLat,
+    centerLon: source.centerLon,
     minLat: source.minLat,
     maxLat: source.maxLat,
     minLon: source.minLon,
@@ -717,17 +755,23 @@
   let selectedPoint = $state<MapPoint | null>(null);
   let viewport = $state(createInitialViewport());
   let filters = $state(createInitialFilters());
+  let filterUrlSyncReady = $state(false);
+  let restoredUrlFilters = false;
+  let restoredUrlMapLocation = false;
+  let lastUrlStateKey = $state('');
   let popupFields = $state(createInitialPopupFields());
   let popupFieldTouched = $state<Record<string, boolean>>({});
   let appliedPopupState = $state<PopupStateSnapshot>(createInitialPopupStateSnapshot());
   let colorScaleSettings = $state(createInitialColorScaleSettings());
   let activeQuery = $state<MapQuerySnapshot | null>(null);
+  let mapFocus = $state<MapFocus | null>(null);
   let loadingTrackDatasetIds = $state<string[]>([]);
   let basemapKey = $state<BasemapKey>('default');
   let mapDatasetDefaults = $state<MapDatasetDefaultRecord>({});
   let mapDatasetOrder = $state<string[]>([]);
   let mapFieldOrder = $state<MapFieldOrder>([]);
   let mapFieldVisibility = $state<MapFieldVisibilityRecord>({});
+  let sidebarSize = $state<SidebarSize>('large');
   let sidebarUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   let queuedSidebarSnapshot: {
     query: MapQuerySnapshot;
@@ -776,7 +820,13 @@
     return value.slice(-8);
   };
 
+  const toUrlNumber = (value: string | null) => (
+    value === null || !value.trim() ? null : toFiniteNumber(value)
+  );
+  const roundUrlCoordinate = ({ value }: { value: number }) => Number(value.toFixed(4));
+
   const availableBasemapKeys: BasemapKey[] = ['default', 'satellite', 'light', 'topo'];
+  const availableSidebarSizes: SidebarSize[] = ['small', 'large'];
 
   const getScopedStorageKey = ({ prefix }: { prefix: string }) => `${prefix}.${$sessionStore.user?.id ?? 'default'}`;
 
@@ -841,12 +891,255 @@
     window.localStorage.setItem(getScopedStorageKey({ prefix }), value);
   };
 
+  const toStoredStringArray = ({ value }: { value: unknown }) => (
+    Array.isArray(value)
+      ? value.filter((entry): entry is string => typeof entry === 'string')
+      : []
+  );
+
+  const getUrlSelectionMode = ({
+    allowDefault = false,
+    value
+  }: {
+    allowDefault?: boolean;
+    value: unknown;
+  }): UrlSelectionMode => {
+    if (value === 'none' || value === 'all' || (allowDefault && value === 'default')) {
+      return value;
+    }
+
+    return 'explicit';
+  };
+
+  let restoredUrlDatasetIdsMode: UrlSelectionMode = 'explicit';
+  let restoredUrlCombinedDatasetIdsMode: UrlSelectionMode = 'explicit';
+
+  const normalizeStoredFilters = ({ value }: { value: unknown }): MapFilters | null => {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+
+    const defaults = createInitialFilters();
+    const source = value as Record<string, unknown>;
+    const trackSelectionMode = ['all', 'include', 'none'].includes(String(source.trackSelectionMode))
+      ? source.trackSelectionMode as MapFilters['trackSelectionMode']
+      : defaults.trackSelectionMode;
+    const mode = ['aggregate', 'raw'].includes(String(source.mode))
+      ? source.mode as MapFilters['mode']
+      : defaults.mode;
+    const shape = ['hexagon', 'square', 'circle'].includes(String(source.shape))
+      ? source.shape as MapFilters['shape']
+      : defaults.shape;
+    const aggregateStat = ['min', 'max', 'mean', 'median', 'mode', 'count'].includes(String(source.aggregateStat))
+      ? source.aggregateStat as MapFilters['aggregateStat']
+      : defaults.aggregateStat;
+    const timeFilterMode = ['none', 'absolute', 'relative'].includes(String(source.timeFilterMode))
+      ? source.timeFilterMode as TimeFilterMode
+      : defaults.timeFilterMode;
+    const timeFilterPrecision = ['date', 'datetime'].includes(String(source.timeFilterPrecision))
+      ? source.timeFilterPrecision as TimeFilterPrecision
+      : defaults.timeFilterPrecision;
+    const timeFilterRelativeUnit = ['hours', 'days'].includes(String(source.timeFilterRelativeUnit))
+      ? source.timeFilterRelativeUnit as TimeFilterRelativeUnit
+      : defaults.timeFilterRelativeUnit;
+    const cellSizeMeters = toFiniteNumber(source.cellSizeMeters);
+    const timeFilterRelativeAmount = toFiniteNumber(source.timeFilterRelativeAmount);
+
+    return {
+      datasetIds: toStoredStringArray({ value: source.datasetIds }),
+      combinedDatasetIds: toStoredStringArray({ value: source.combinedDatasetIds }),
+      trackIds: toStoredStringArray({ value: source.trackIds }),
+      trackSelectionMode,
+      metric: typeof source.metric === 'string' && source.metric ? source.metric : defaults.metric,
+      mode,
+      shape,
+      aggregateStat,
+      cellSizeMeters: cellSizeMeters && cellSizeMeters >= 10 ? cellSizeMeters : defaults.cellSizeMeters,
+      autoCellSize: typeof source.autoCellSize === 'boolean' ? source.autoCellSize : defaults.autoCellSize,
+      applyExcludeAreas: typeof source.applyExcludeAreas === 'boolean'
+        ? source.applyExcludeAreas
+        : defaults.applyExcludeAreas,
+      timeFilterMode,
+      timeFilterPrecision,
+      timeFilterStart: typeof source.timeFilterStart === 'string' ? source.timeFilterStart : defaults.timeFilterStart,
+      timeFilterEnd: typeof source.timeFilterEnd === 'string' ? source.timeFilterEnd : defaults.timeFilterEnd,
+      timeFilterRelativeAmount: timeFilterRelativeAmount && timeFilterRelativeAmount > 0
+        ? Math.trunc(timeFilterRelativeAmount)
+        : defaults.timeFilterRelativeAmount,
+      timeFilterRelativeUnit,
+      forceRecheck: false
+    };
+  };
+
+  const parseUrlFilterValue = ({ rawValue }: { rawValue: string }) => {
+    try {
+      return JSON.parse(rawValue);
+    } catch {
+      try {
+        return JSON.parse(decodeURIComponent(rawValue));
+      } catch {
+        return null;
+      }
+    }
+  };
+
+  const loadUrlFilters = (): MapFilters | null => {
+    if (!browser) {
+      return null;
+    }
+
+    const rawValue = new URL(window.location.href).searchParams.get(filterUrlParamName);
+    if (!rawValue) {
+      return null;
+    }
+
+    const parsedValue = parseUrlFilterValue({ rawValue });
+    if (!parsedValue || typeof parsedValue !== 'object') {
+      return null;
+    }
+
+    restoredUrlDatasetIdsMode = getUrlSelectionMode({
+      allowDefault: true,
+      value: (parsedValue as Record<string, unknown>).datasetIds
+    });
+    restoredUrlCombinedDatasetIdsMode = getUrlSelectionMode({
+      value: (parsedValue as Record<string, unknown>).combinedDatasetIds
+    });
+
+    return normalizeStoredFilters({ value: parsedValue });
+  };
+
+  const buildCompactUrlFilters = ({ nextFilters }: { nextFilters: MapFilters }) => {
+    const clonedFilters = cloneFilters(nextFilters, { clearOneShotControls: true });
+    const defaultDatasetIds = getDefaultDatasetIds();
+    const selectedDatasetIds = new Set(clonedFilters.datasetIds);
+    const datasetIdsValue = !clonedFilters.datasetIds.length
+      ? 'none'
+      : (
+        datasets.length && clonedFilters.datasetIds.length === datasets.length
+          ? 'all'
+          : (
+            defaultDatasetIds.length
+            && clonedFilters.datasetIds.length === defaultDatasetIds.length
+            && defaultDatasetIds.every((datasetId) => selectedDatasetIds.has(datasetId))
+              ? 'default'
+              : clonedFilters.datasetIds
+          )
+      );
+    const combinedDatasetIdsValue = !clonedFilters.combinedDatasetIds.length
+      ? 'none'
+      : (
+        combinedDatasets.length && clonedFilters.combinedDatasetIds.length === combinedDatasets.length
+          ? 'all'
+          : clonedFilters.combinedDatasetIds
+      );
+
+    return {
+      ...clonedFilters,
+      datasetIds: datasetIdsValue,
+      combinedDatasetIds: combinedDatasetIdsValue
+    };
+  };
+
+  const loadUrlMapFocus = () => {
+    if (!browser) {
+      return null;
+    }
+
+    const url = new URL(window.location.href);
+    const latitude = toUrlNumber(url.searchParams.get(mapLatUrlParamName));
+    const longitude = toUrlNumber(url.searchParams.get(mapLonUrlParamName));
+    const zoom = toUrlNumber(url.searchParams.get(mapZoomUrlParamName));
+    if (
+      latitude === null
+      || longitude === null
+      || zoom === null
+      || latitude < -90
+      || latitude > 90
+      || longitude < -180
+      || longitude > 180
+    ) {
+      return null;
+    }
+
+    restoredUrlMapLocation = true;
+    return createMapFocus({
+      latitude,
+      longitude,
+      source: 'url',
+      zoom: Math.max(1, Math.min(18, Math.round(zoom)))
+    });
+  };
+
+  const getDefaultDatasetIds = () => datasets
+    .filter((dataset) => isMapDatasetDefaultEnabled({
+      defaults: mapDatasetDefaults,
+      datasetId: dataset.id
+    }))
+    .map((dataset) => dataset.id);
+
+  const createResetFilters = (): MapFilters => {
+    const defaultDatasetIds = getDefaultDatasetIds();
+    return {
+      ...createInitialFilters(),
+      autoCellSize: loadStoredBoolean({
+        prefix: autoCellSizeStorageKeyPrefix,
+        fallbackValue: true
+      }),
+      datasetIds: defaultDatasetIds,
+      trackIds: [],
+      trackSelectionMode: defaultDatasetIds.length ? 'all' : 'none'
+    };
+  };
+
+  const serializeUrlMapState = ({
+    nextFilters,
+    nextViewport
+  }: {
+    nextFilters: MapFilters;
+    nextViewport: MapViewport;
+  }) => JSON.stringify({
+    filters: buildCompactUrlFilters({ nextFilters }),
+    latitude: roundUrlCoordinate({ value: nextViewport.centerLat }),
+    longitude: roundUrlCoordinate({ value: nextViewport.centerLon }),
+    zoom: Math.round(nextViewport.zoom)
+  });
+
+  const replaceUrlMapState = ({
+    nextFilters,
+    nextViewport
+  }: {
+    nextFilters: MapFilters;
+    nextViewport: MapViewport;
+  }) => {
+    if (!browser) {
+      return;
+    }
+
+    const nextUrlStateKey = serializeUrlMapState({
+      nextFilters,
+      nextViewport
+    });
+    const url = new URL(window.location.href);
+    url.searchParams.set(
+      filterUrlParamName,
+      JSON.stringify(buildCompactUrlFilters({ nextFilters }))
+    );
+    url.searchParams.set(mapLatUrlParamName, roundUrlCoordinate({ value: nextViewport.centerLat }).toFixed(4));
+    url.searchParams.set(mapLonUrlParamName, roundUrlCoordinate({ value: nextViewport.centerLon }).toFixed(4));
+    url.searchParams.set(mapZoomUrlParamName, String(Math.round(nextViewport.zoom)));
+    window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
+    lastUrlStateKey = nextUrlStateKey;
+  };
+
   const loadMapPreferences = () => {
     autoUpdateMap = loadStoredBoolean({
       prefix: autoUpdateStorageKeyPrefix,
       fallbackValue: true
     });
-    filters = {
+    const encodedUrlFilters = loadUrlFilters();
+    restoredUrlFilters = Boolean(encodedUrlFilters);
+    filters = encodedUrlFilters ?? {
       ...filters,
       autoCellSize: loadStoredBoolean({
         prefix: autoCellSizeStorageKeyPrefix,
@@ -861,6 +1154,13 @@
     basemapKey = availableBasemapKeys.includes(storedBasemapKey as BasemapKey)
       ? storedBasemapKey as BasemapKey
       : 'default';
+    const storedSidebarSize = loadStoredString({
+      prefix: sidebarSizeStorageKeyPrefix,
+      fallbackValue: 'large'
+    });
+    sidebarSize = availableSidebarSizes.includes(storedSidebarSize as SidebarSize)
+      ? storedSidebarSize as SidebarSize
+      : 'large';
     mapDatasetDefaults = loadMapDatasetDefaults({
       userId: $sessionStore.user?.id ?? null
     });
@@ -1283,6 +1583,9 @@
     stat: getAggregateStatLabel(activeAggregateStat)
   }));
   const activeAppliedCellSizeMeters = $derived(activeQuery?.filters.appliedCellSizeMeters ?? effectiveCellSizeMeters);
+  const activeSidebarWidth = $derived(
+    sidebarSizeOptions.find((option) => option.key === sidebarSize)?.width ?? '35rem'
+  );
   const visibleRawPointCount = $derived.by(() => {
     if (activeMode !== 'aggregate') {
       return points.length;
@@ -1421,12 +1724,20 @@
       states: appliedPopupMetricStates
     })
   );
+  const hasPendingUrlState = $derived.by(() => (
+    filterUrlSyncReady
+    && serializeUrlMapState({
+      nextFilters: filters,
+      nextViewport: viewport
+    }) !== lastUrlStateKey
+  ));
 
   const canUpdateMap = $derived.by(() => (
     !loading
     && !timeFilterValidationMessage
     && (
       hasPendingSidebarChanges()
+      || (!autoUpdateMap && hasPendingUrlState)
       || filters.timeFilterMode === 'relative'
       || filters.forceRecheck
     )
@@ -1503,19 +1814,167 @@
     }, autoUpdateDebounceMs);
   };
 
-  const buildBaseQuery = ({ snapshot }: { snapshot: MapQuerySnapshot }) => ({
+  const buildBaseQuery = ({
+    includeViewport = true,
+    snapshot
+  }: {
+    includeViewport?: boolean;
+    snapshot: MapQuerySnapshot;
+  }) => ({
     datasetIds: snapshot.filters.datasetIds,
     combinedDatasetIds: snapshot.filters.combinedDatasetIds,
     datalogIds: snapshot.filters.trackIds,
     datalogSelectionMode: snapshot.filters.trackSelectionMode,
     metric: snapshot.filters.metric,
-    minLat: snapshot.viewport.minLat,
-    maxLat: snapshot.viewport.maxLat,
-    minLon: snapshot.viewport.minLon,
-    maxLon: snapshot.viewport.maxLon,
+    ...(includeViewport
+      ? {
+          minLat: snapshot.viewport.minLat,
+          maxLat: snapshot.viewport.maxLat,
+          minLon: snapshot.viewport.minLon,
+          maxLon: snapshot.viewport.maxLon
+        }
+      : {}),
     applyExcludeAreas: snapshot.filters.applyExcludeAreas,
     ...buildTimeFilterQuery({ sourceFilters: snapshot.filters })
   });
+
+  const createMapFocus = ({
+    latitude,
+    longitude,
+    source,
+    zoom
+  }: {
+    latitude: number;
+    longitude: number;
+    source: string;
+    zoom: number;
+  }): MapFocus => ({
+    latitude,
+    longitude,
+    zoom,
+    key: `${source}:${Date.now()}:${latitude.toFixed(5)}:${longitude.toFixed(5)}:${zoom}`
+  });
+
+  const getBrowserLocationFocus = () => new Promise<MapFocus | null>((resolve) => {
+    if (!browser || !navigator.geolocation) {
+      resolve(null);
+      return;
+    }
+
+    let settled = false;
+    const finish = (value: MapFocus | null) => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      resolve(value);
+    };
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        finish(createMapFocus({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          source: 'geolocation',
+          zoom: userLocationZoom
+        }));
+      },
+      () => {
+        finish(null);
+      },
+      {
+        enableHighAccuracy: false,
+        maximumAge: 10 * 60 * 1000,
+        timeout: 2500
+      }
+    );
+
+    window.setTimeout(() => {
+      finish(null);
+    }, 3000);
+  });
+
+  const getFirstDataPointFocus = async () => {
+    const hasSelectedDataSource = filters.datasetIds.length || filters.combinedDatasetIds.length;
+    const focusFilters: MapFilters = hasSelectedDataSource
+      ? filters
+      : {
+          ...filters,
+          datasetIds: datasets.map((dataset) => dataset.id),
+          trackIds: [],
+          trackSelectionMode: datasets.length ? 'all' as const : 'none' as const
+        };
+
+    if (!focusFilters.datasetIds.length && !focusFilters.combinedDatasetIds.length) {
+      return null;
+    }
+
+    const snapshot = getCurrentQuerySnapshot({
+      filters: focusFilters
+    });
+    const response = await apiFetch<any>({
+      path: '/api/map/points',
+      query: {
+        ...buildBaseQuery({
+          includeViewport: false,
+          snapshot
+        }),
+        limit: 1
+      }
+    });
+    const point = response.result?.points?.[0];
+    if (
+      !point
+      || !Number.isFinite(point.latitude)
+      || !Number.isFinite(point.longitude)
+    ) {
+      return null;
+    }
+
+    return createMapFocus({
+      latitude: point.latitude,
+      longitude: point.longitude,
+      source: 'first-data-point',
+      zoom: firstDataPointZoom
+    });
+  };
+
+  const initializeMapFocus = async () => {
+    const applyInitialFocus = ({ focus }: { focus: MapFocus }) => {
+      viewport = {
+        ...viewport,
+        centerLat: focus.latitude,
+        centerLon: focus.longitude,
+        zoom: focus.zoom
+      };
+      mapFocus = focus;
+    };
+
+    const urlMapFocus = loadUrlMapFocus();
+    if (urlMapFocus) {
+      applyInitialFocus({ focus: urlMapFocus });
+      return true;
+    }
+
+    const browserLocationFocus = await getBrowserLocationFocus();
+    if (browserLocationFocus) {
+      applyInitialFocus({ focus: browserLocationFocus });
+      return true;
+    }
+
+    try {
+      const firstDataPointFocus = await getFirstDataPointFocus();
+      if (firstDataPointFocus) {
+        applyInitialFocus({ focus: firstDataPointFocus });
+        return true;
+      }
+    } catch {
+      return false;
+    }
+
+    return false;
+  };
 
   const loadLookups = async () => {
     try {
@@ -1531,13 +1990,39 @@
       datasets = sortedDatasets;
       combinedDatasets = combinedResponse.combinedDatasets;
 
-      if (!filters.datasetIds.length && !filters.combinedDatasetIds.length) {
-        const defaultDatasetIds = sortedDatasets
-          .filter((dataset) => isMapDatasetDefaultEnabled({
-            defaults: mapDatasetDefaults,
-            datasetId: dataset.id
-          }))
-          .map((dataset) => dataset.id);
+      if (
+        restoredUrlDatasetIdsMode !== 'explicit'
+        || restoredUrlCombinedDatasetIdsMode !== 'explicit'
+      ) {
+        filters = {
+          ...filters,
+          datasetIds: (
+            restoredUrlDatasetIdsMode === 'all'
+              ? sortedDatasets.map((dataset) => dataset.id)
+              : (
+                restoredUrlDatasetIdsMode === 'default'
+                  ? getDefaultDatasetIds()
+                  : (
+                    restoredUrlDatasetIdsMode === 'none'
+                      ? []
+                      : filters.datasetIds
+                  )
+              )
+          ),
+          combinedDatasetIds: (
+            restoredUrlCombinedDatasetIdsMode === 'all'
+              ? combinedResponse.combinedDatasets.map((combinedDataset: CombinedDatasetOption) => combinedDataset.id)
+              : (
+                restoredUrlCombinedDatasetIdsMode === 'none'
+                  ? []
+                  : filters.combinedDatasetIds
+              )
+          )
+        };
+      }
+
+      if (!restoredUrlFilters && !filters.datasetIds.length && !filters.combinedDatasetIds.length) {
+        const defaultDatasetIds = getDefaultDatasetIds();
         filters = {
           ...filters,
           datasetIds: defaultDatasetIds,
@@ -1689,6 +2174,13 @@
       return;
     }
 
+    if (!autoUpdateMap) {
+      replaceUrlMapState({
+        nextFilters: filters,
+        nextViewport: viewport
+      });
+    }
+
     const nextPopupState = getPendingPopupStateSnapshot();
     const nextSnapshot = getCurrentQuerySnapshot();
     if (nextSnapshot.key === activeQuery?.key && nextSnapshot.filters.timeFilterMode === 'relative') {
@@ -1812,6 +2304,21 @@
     });
   };
 
+  const handleSidebarSizeChange = ({ nextSize }: { nextSize: SidebarSize }) => {
+    sidebarSize = nextSize;
+    persistString({
+      prefix: sidebarSizeStorageKeyPrefix,
+      value: nextSize
+    });
+  };
+
+  const handleFilterReset = () => {
+    clearScheduledSidebarUpdate();
+    restoredUrlFilters = false;
+    filters = createResetFilters();
+    handleFilterChange();
+  };
+
   const hideSelectedPoint = async () => {
     if (!$sessionStore.csrf || !selectedPoint) {
       return;
@@ -1839,11 +2346,36 @@
   onMount(async () => {
     loadMapPreferences();
     await loadLookups();
-    await loadMapData();
+    const focusedMap = await initializeMapFocus();
+    if (restoredUrlFilters && restoredUrlMapLocation) {
+      lastUrlStateKey = serializeUrlMapState({
+        nextFilters: filters,
+        nextViewport: viewport
+      });
+    }
+    filterUrlSyncReady = true;
+    if (!focusedMap) {
+      await loadMapData();
+    }
   });
 
   onDestroy(() => {
     clearScheduledSidebarUpdate();
+  });
+
+  $effect(() => {
+    const nextFilters = cloneFilters(filters, { clearOneShotControls: true });
+    const nextViewport = cloneViewport(viewport);
+    if (!filterUrlSyncReady || !autoUpdateMap) {
+      return;
+    }
+
+    untrack(() => {
+      replaceUrlMapState({
+        nextFilters,
+        nextViewport
+      });
+    });
   });
 
   $effect(() => {
@@ -1905,16 +2437,37 @@
     </div>
   </div>
 
-  <div class="map-layout">
-    <aside class="map-sidebar">
+  <div class="map-layout" style={`--map-sidebar-width: ${activeSidebarWidth};`}>
+    <aside class="map-sidebar" class:compact={sidebarSize === 'small'}>
       <section class="panel">
         <div class="map-panel-header">
           <h2>{t('radtrack-common_filters-label')}</h2>
-          {#if !autoUpdateMap}
-            <button class="primary" disabled={!canUpdateMap} onclick={updateMap}>
-              {t('radtrack-map_update-button')}
+          <div class="map-panel-actions">
+            <div class="sidebar-size-toggle" aria-label={t('radtrack-map_sidebar_size-label')}>
+              {#each sidebarSizeOptions as option}
+                <button
+                  aria-pressed={sidebarSize === option.key}
+                  class:active={sidebarSize === option.key}
+                  onclick={() => {
+                    handleSidebarSizeChange({ nextSize: option.key });
+                  }}
+                  aria-label={t(option.titleKey)}
+                  title={t(option.titleKey)}
+                  type="button"
+                >
+                  <span aria-hidden="true" class={`sidebar-size-icon sidebar-size-icon-${option.key}`}></span>
+                </button>
+              {/each}
+            </div>
+            <button onclick={handleFilterReset} type="button">
+              {t('radtrack-map_reset_filters-button')}
             </button>
-          {/if}
+            {#if !autoUpdateMap}
+              <button class="primary" disabled={!canUpdateMap} onclick={updateMap}>
+                {t('radtrack-map_update-button')}
+              </button>
+            {/if}
+          </div>
         </div>
 
         <label class="checkbox-field map-auto-update">
@@ -2384,6 +2937,7 @@
           aggregates={aggregates}
           attribution={activeBasemap?.attribution ?? ''}
           colorScale={activeMode === 'aggregate' ? activeColorScale : null}
+          focus={mapFocus}
           metricLabels={popupLabelsRecord}
           metricValueTypes={fieldValueTypesRecord}
           mode={activeMode}
@@ -2464,7 +3018,7 @@
 
   .map-layout {
     display: grid;
-    grid-template-columns: minmax(22rem, 33.75rem) minmax(0, 1fr);
+    grid-template-columns: minmax(22rem, var(--map-sidebar-width, 35rem)) minmax(0, 1fr);
     gap: var(--space-4);
     align-items: stretch;
     width: 100%;
@@ -2510,6 +3064,67 @@
     gap: var(--space-3);
     margin-bottom: var(--space-3);
     flex-wrap: wrap;
+  }
+
+  .map-panel-actions {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin-left: auto;
+  }
+
+  .sidebar-size-toggle {
+    display: inline-grid;
+    grid-template-columns: repeat(2, 2.1rem);
+    gap: 1px;
+    padding: 0.18rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel);
+  }
+
+  .sidebar-size-toggle button {
+    min-width: 0;
+    width: 2.1rem;
+    height: 2rem;
+    padding: 0;
+    border-color: transparent;
+    background: transparent;
+    color: var(--color-text-muted);
+  }
+
+  .sidebar-size-toggle button:hover,
+  .sidebar-size-toggle button.active {
+    border-color: var(--color-accent);
+    background: rgba(0, 182, 255, 0.12);
+    color: var(--color-text);
+  }
+
+  .sidebar-size-icon {
+    position: relative;
+    display: inline-block;
+    height: 1rem;
+    border: 1px solid currentColor;
+    border-radius: 0.2rem;
+  }
+
+  .sidebar-size-icon::before {
+    content: '';
+    position: absolute;
+    inset-block: 0.18rem;
+    left: 0.2rem;
+    width: 0.22rem;
+    border-radius: 999px;
+    background: currentColor;
+    opacity: 0.75;
+  }
+
+  .sidebar-size-icon-small {
+    width: 0.82rem;
+  }
+
+  .sidebar-size-icon-large {
+    width: 1.28rem;
   }
 
   .checkbox-field {
@@ -2750,6 +3365,13 @@
     display: grid;
     gap: var(--space-3);
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .map-sidebar.compact .time-filter-range-grid,
+  .map-sidebar.compact .scale-grid,
+  .map-sidebar.compact .popup-field-grid,
+  .map-sidebar.compact .field-group {
+    grid-template-columns: 1fr;
   }
 
   .map-overlay {

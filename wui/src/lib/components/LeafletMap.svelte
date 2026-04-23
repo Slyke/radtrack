@@ -82,6 +82,13 @@
     id: string;
   };
 
+  type MapFocus = {
+    latitude: number;
+    longitude: number;
+    zoom: number;
+    key: string;
+  };
+
   interface Props {
     points?: MapPoint[];
     aggregates?: AggregateCell[];
@@ -94,6 +101,7 @@
     metricValueTypes?: Record<string, 'number' | 'time' | 'string'>;
     tileUrlTemplate?: string;
     attribution?: string;
+    focus?: MapFocus | null;
   }
 
   let {
@@ -109,11 +117,14 @@
     metricLabels = {},
     metricValueTypes = {},
     tileUrlTemplate = '',
-    attribution = ''
+    attribution = '',
+    focus = null
   }: Props = $props();
 
   const dispatch = createEventDispatcher<{
     viewportchange: {
+      centerLat: number;
+      centerLon: number;
       minLat: number;
       maxLat: number;
       minLon: number;
@@ -187,6 +198,7 @@
   let activeTileLayerSignature = '';
   let activePopup: ActivePopup | null = null;
   let preservePopupState = false;
+  let appliedFocusKey = '';
   const overlayPane = 'data-overlay';
   const popupHeightAllowancePx = 20;
 
@@ -787,7 +799,10 @@
     }
 
     const bounds = map.getBounds();
+    const center = map.getCenter();
     dispatch('viewportchange', {
+      centerLat: center.lat,
+      centerLon: wrapLongitude(center.lng),
       minLat: bounds.getSouth(),
       maxLat: bounds.getNorth(),
       minLon: bounds.getWest(),
@@ -872,6 +887,17 @@
 
     emitViewport();
     rerenderCurrentView();
+  };
+
+  const applyFocus = ({ nextFocus }: { nextFocus: MapFocus | null }) => {
+    if (!map || !nextFocus || appliedFocusKey === nextFocus.key) {
+      return;
+    }
+
+    appliedFocusKey = nextFocus.key;
+    map.setView([nextFocus.latitude, nextFocus.longitude], nextFocus.zoom, {
+      animate: false
+    });
   };
 
   const render = ({
@@ -1106,12 +1132,17 @@
       updatePopupLayoutVars();
       map?.invalidateSize();
     });
+    applyFocus({ nextFocus: focus });
     handleMoveEnd();
   });
 
   onDestroy(() => {
     resizeObserver?.disconnect();
     map?.remove();
+  });
+
+  $effect(() => {
+    applyFocus({ nextFocus: focus });
   });
 
   $effect(() => {
