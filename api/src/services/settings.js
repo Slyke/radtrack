@@ -15,6 +15,14 @@ const defaultSettingsFromConfig = ({ runtimeConfig }) => ({
 });
 
 const fromRows = ({ rows }) => Object.fromEntries(rows.map((row) => [row.key_name, row.value_json]));
+const userSettingKeys = {
+  cellCacheRefreshTtlOnRead: 'aggregation.cellCacheRefreshTtlOnRead'
+};
+const isUserSettingKey = ({ key }) => Object.prototype.hasOwnProperty.call(userSettingKeys, key);
+
+const defaultUserSettingsFromConfig = ({ runtimeConfig }) => ({
+  cellCacheRefreshTtlOnRead: runtimeConfig.aggregation.cellCacheRefreshTtlOnRead === true
+});
 
 export const createSettingsService = ({ db, runtimeConfig }) => {
   const seedRuntimeSettings = async ({ correlationId = null } = {}) => {
@@ -69,6 +77,77 @@ export const createSettingsService = ({ db, runtimeConfig }) => {
     };
   };
 
+  const getUserSettings = async ({ userId }) => {
+    const defaults = defaultUserSettingsFromConfig({ runtimeConfig });
+    const result = await db.query(
+      `SELECT key_name, value_json
+       FROM user_settings
+       WHERE user_id = $1`,
+      [userId]
+    );
+    const rowsByKey = fromRows({ rows: result.rows });
+
+    return {
+      cellCacheRefreshTtlOnRead: typeof rowsByKey[userSettingKeys.cellCacheRefreshTtlOnRead] === 'boolean'
+        ? rowsByKey[userSettingKeys.cellCacheRefreshTtlOnRead]
+        : defaults.cellCacheRefreshTtlOnRead,
+      defaults
+    };
+  };
+
+  const updateUserSettings = async ({ userId, updates, correlationId = null }) => {
+    if (!updates || typeof updates !== 'object' || Array.isArray(updates)) {
+      throw createAppError({
+        caller: 'settings::updateUserSettings',
+        reason: 'User settings update payload must be an object.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    const unknownKeys = Object.keys(updates).filter((key) => !isUserSettingKey({ key }));
+    if (unknownKeys.length) {
+      throw createAppError({
+        caller: 'settings::updateUserSettings',
+        reason: 'User settings update payload includes unsupported keys.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400,
+        context: { unknownKeys }
+      });
+    }
+
+    if (
+      'cellCacheRefreshTtlOnRead' in updates
+      && typeof updates.cellCacheRefreshTtlOnRead !== 'boolean'
+    ) {
+      throw createAppError({
+        caller: 'settings::updateUserSettings',
+        reason: 'cellCacheRefreshTtlOnRead must be a boolean.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    const now = new Date().toISOString();
+    await db.withTransaction(async (client) => {
+      for (const [key, value] of Object.entries(updates)) {
+        await client.query(
+          `INSERT INTO user_settings (user_id, key_name, value_json, updated_at)
+           VALUES ($1, $2, $3::jsonb, $4)
+           ON CONFLICT (user_id, key_name) DO UPDATE
+           SET value_json = EXCLUDED.value_json,
+               updated_at = EXCLUDED.updated_at`,
+          [userId, userSettingKeys[key], JSON.stringify(value), now]
+        );
+      }
+    });
+
+    return getUserSettings({ userId });
+  };
+
   const updateSettings = async ({ updates, actorUserId, correlationId = null }) => {
     if (!updates || typeof updates !== 'object') {
       throw createAppError({
@@ -101,6 +180,8 @@ export const createSettingsService = ({ db, runtimeConfig }) => {
     listSettings,
     getSettingsMap,
     getUiConfig,
+    getUserSettings,
+    updateUserSettings,
     updateSettings
   };
 };

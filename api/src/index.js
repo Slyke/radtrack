@@ -1348,7 +1348,38 @@ const main = async () => {
     sendJson({ res, body: { ok: true } });
   }));
 
-  app.get('/api/settings', asyncHandler(async (req, res) => {
+  app.get('/api/user-settings', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    const uiConfig = await settingsService.getUiConfig();
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        settings: await settingsService.getUserSettings({ userId: auth.user.id }),
+        aggregation: {
+          cacheTtlSeconds: uiConfig.cacheTtlSeconds
+        }
+      }
+    });
+  }));
+
+  app.put('/api/user-settings', asyncHandler(async (req, res) => {
+    const auth = requireMutationAuth({
+      req,
+      runtimeConfig,
+      authService,
+      correlationId: req.correlationId
+    });
+    const body = requireJsonBodyObject({ body: req.body, correlationId: req.correlationId });
+    const updatedSettings = await settingsService.updateUserSettings({
+      userId: auth.user.id,
+      updates: body.settings ?? body.updates ?? body,
+      correlationId: req.correlationId
+    });
+    sendJson({ res, body: { ok: true, settings: updatedSettings } });
+  }));
+
+  app.get(['/api/settings', '/api/admin/settings'], asyncHandler(async (req, res) => {
     const auth = requireAuth({ req, correlationId: req.correlationId });
     if (!canManageSystem({ user: auth.user })) {
       throw new AppError({
@@ -1370,14 +1401,15 @@ const main = async () => {
             oidcEnabled: runtimeConfig.auth.oidcEnabled,
             headerEnabled: runtimeConfig.auth.headerEnabled
           },
-          map: runtimeConfig.map
+          map: runtimeConfig.map,
+          aggregation: runtimeConfig.aggregation
         },
         settings: await settingsService.listSettings()
       }
     });
   }));
 
-  app.put('/api/settings', asyncHandler(async (req, res) => {
+  app.put(['/api/settings', '/api/admin/settings'], asyncHandler(async (req, res) => {
     const auth = requireMutationAuth({
       req,
       runtimeConfig,

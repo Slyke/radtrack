@@ -36,6 +36,8 @@ Mutable non-secret settings are seeded from bootstrap files into Postgres and th
 - Redis cache TTL seconds
 - map tile URL template and attribution
 
+`aggregation.cellCacheRefreshTtlOnRead` is a bootstrap default for each user's Settings page. It defaults to `false`; when a user enables the setting, aggregate cell cache hits reset the configured `aggregation.cacheTtlSeconds` timer on read.
+
 `ui.defaultLanguage` comes from the bootstrap config file and currently controls the WUI language with `en-US` fallback. There is no runtime language picker.
 
 ## Additional Env Vars

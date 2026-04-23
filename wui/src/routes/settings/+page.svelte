@@ -6,10 +6,11 @@
   import { localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
 
-  let bootstrapInfo = $state<any>(null);
-  let settings = $state<any[]>([]);
-  let updatesJson = $state('{\n  "map.defaultMetric": "doseRate"\n}');
+  let cellCacheRefreshTtlOnRead = $state(false);
+  let cacheTtlSeconds = $state<number | null>(null);
   let errorMessage = $state<string | null>(null);
+  let saveMessage = $state<string | null>(null);
+  let saving = $state(false);
 
   const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
     key,
@@ -19,31 +20,41 @@
 
   const loadSettings = async () => {
     try {
-      const response = await apiFetch<any>({ path: '/api/settings' });
-      bootstrapInfo = response.bootstrap;
-      settings = response.settings;
+      const response = await apiFetch<any>({ path: '/api/user-settings' });
+      cellCacheRefreshTtlOnRead = response.settings?.cellCacheRefreshTtlOnRead === true;
+      cacheTtlSeconds = Number.isFinite(Number(response.aggregation?.cacheTtlSeconds))
+        ? Number(response.aggregation.cacheTtlSeconds)
+        : null;
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : t('radtrack-settings_failed_load');
     }
   };
 
   const saveSettings = async () => {
-    if (!$sessionStore.csrf) {
+    if (!$sessionStore.csrf || saving) {
       return;
     }
 
+    saving = true;
+    errorMessage = null;
+    saveMessage = null;
     try {
-      await apiFetch({
-        path: '/api/settings',
+      const response = await apiFetch<any>({
+        path: '/api/user-settings',
         method: 'PUT',
         body: {
-          updates: JSON.parse(updatesJson)
+          settings: {
+            cellCacheRefreshTtlOnRead
+          }
         },
         csrf: $sessionStore.csrf
       });
-      await loadSettings();
+      cellCacheRefreshTtlOnRead = response.settings?.cellCacheRefreshTtlOnRead === true;
+      saveMessage = t('radtrack-settings_saved');
     } catch (error) {
       errorMessage = error instanceof Error ? error.message : t('radtrack-settings_failed_save');
+    } finally {
+      saving = false;
     }
   };
 
@@ -63,41 +74,53 @@
   </section>
 {/if}
 
-<section class="grid cols-2">
-  <article class="panel">
-    <h2>{t('radtrack-settings_bootstrap-title')}</h2>
-    <pre>{JSON.stringify(bootstrapInfo, null, 2)}</pre>
-  </article>
+{#if saveMessage}
+  <section class="panel">
+    <p class="muted">{saveMessage}</p>
+  </section>
+{/if}
 
-  <article class="panel">
-    <h2>{t('radtrack-settings_update-title')}</h2>
-    <div class="form-grid">
-      <textarea bind:value={updatesJson}></textarea>
-      <button class="primary" onclick={saveSettings}>{t('radtrack-common_save-button')}</button>
-    </div>
-  </article>
+<section class="panel settings-panel">
+  <h2>{t('radtrack-settings_cache-title')}</h2>
+  <label class="checkbox-field">
+    <input
+      bind:checked={cellCacheRefreshTtlOnRead}
+      onchange={() => {
+        saveMessage = null;
+      }}
+      type="checkbox"
+    />
+    <span>{t('radtrack-settings_cell_cache_refresh_ttl_on_read-label')}</span>
+  </label>
+  <p class="muted">
+    {#if cacheTtlSeconds === null}
+      {t('radtrack-settings_cell_cache_refresh_ttl_on_read-description')}
+    {:else}
+      {t('radtrack-settings_cell_cache_refresh_ttl_on_read_seconds-description', {
+        seconds: cacheTtlSeconds
+      })}
+    {/if}
+  </p>
+  <button class="primary" disabled={saving} onclick={saveSettings}>
+    {t('radtrack-common_save-button')}
+  </button>
 </section>
 
-<section class="panel">
-  <h2>{t('radtrack-settings_current_runtime-title')}</h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>{t('radtrack-common_name-label')}</th>
-          <th>{t('radtrack-common_value-label')}</th>
-          <th>{t('radtrack-common_source-label')}</th>
-        </tr>
-      </thead>
-      <tbody>
-        {#each settings as setting}
-          <tr>
-            <td>{setting.key}</td>
-            <td><code>{JSON.stringify(setting.value)}</code></td>
-            <td>{setting.source}</td>
-          </tr>
-        {/each}
-      </tbody>
-    </table>
-  </div>
-</section>
+<style>
+  .settings-panel {
+    display: grid;
+    gap: var(--space-4);
+    max-width: 48rem;
+  }
+
+  .checkbox-field {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-3);
+    font-weight: 700;
+  }
+
+  .checkbox-field input {
+    width: auto;
+  }
+</style>

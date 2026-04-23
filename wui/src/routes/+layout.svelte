@@ -25,7 +25,8 @@
     { href: '/combined', labelKey: 'radtrack-layout_nav-combined-label' },
     { href: '/audit', labelKey: 'radtrack-layout_nav-audit-label' },
     { href: '/users', labelKey: 'radtrack-layout_nav-users-label', roles: ['moderator', 'admin'] },
-    { href: '/settings', labelKey: 'radtrack-layout_nav-settings-label', roles: ['admin'] }
+    { href: '/settings', labelKey: 'radtrack-layout_nav-settings-label' },
+    { href: '/admin-settings', labelKey: 'radtrack-layout_nav-admin_settings-label', roles: ['admin'] }
   ];
 
   let bootstrapError = $state<string | null>(null);

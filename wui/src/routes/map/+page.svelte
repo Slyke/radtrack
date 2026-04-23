@@ -781,6 +781,9 @@
     popupState: PopupStateSnapshot;
   } | null = null;
   let requestVersion = 0;
+  let restoredUrlDatasetIdsMode: UrlSelectionMode = 'explicit';
+  let restoredUrlCombinedDatasetIdsMode: UrlSelectionMode = 'explicit';
+  let restoredUrlDatalogIdsMode: UrlSelectionMode = 'explicit';
 
   const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
     key,
@@ -899,6 +902,9 @@
       ? value.filter((entry): entry is string => typeof entry === 'string')
       : []
   );
+  const hasOwn = ({ source, key }: { source: Record<string, unknown>; key: string }) => (
+    Object.prototype.hasOwnProperty.call(source, key)
+  );
 
   const getUrlSelectionMode = ({
     allowDefault = false,
@@ -914,9 +920,6 @@
     return 'explicit';
   };
 
-  let restoredUrlDatasetIdsMode: UrlSelectionMode = 'explicit';
-  let restoredUrlCombinedDatasetIdsMode: UrlSelectionMode = 'explicit';
-
   const normalizeStoredFilters = ({ value }: { value: unknown }): MapFilters | null => {
     if (!value || typeof value !== 'object') {
       return null;
@@ -924,9 +927,22 @@
 
     const defaults = createInitialFilters();
     const source = value as Record<string, unknown>;
-    const trackSelectionMode = ['all', 'include', 'none'].includes(String(source.trackSelectionMode))
-      ? source.trackSelectionMode as MapFilters['trackSelectionMode']
-      : defaults.trackSelectionMode;
+    const datalogIdsValue = source.datalogIds ?? source.trackIds;
+    const datalogIdsMode = getUrlSelectionMode({
+      allowDefault: true,
+      value: datalogIdsValue
+    });
+    const restoredTrackIds = toStoredStringArray({ value: datalogIdsValue });
+    let trackSelectionMode: MapFilters['trackSelectionMode'] = defaults.trackSelectionMode;
+    if (datalogIdsMode === 'none') {
+      trackSelectionMode = 'none';
+    } else if (datalogIdsMode === 'all' || datalogIdsMode === 'default') {
+      trackSelectionMode = defaults.trackSelectionMode;
+    } else if (restoredTrackIds.length) {
+      trackSelectionMode = 'include';
+    } else if (['all', 'include', 'none'].includes(String(source.trackSelectionMode))) {
+      trackSelectionMode = source.trackSelectionMode as MapFilters['trackSelectionMode'];
+    }
     const mode = ['aggregate', 'raw'].includes(String(source.mode))
       ? source.mode as MapFilters['mode']
       : defaults.mode;
@@ -951,7 +967,7 @@
     return {
       datasetIds: toStoredStringArray({ value: source.datasetIds }),
       combinedDatasetIds: toStoredStringArray({ value: source.combinedDatasetIds }),
-      trackIds: toStoredStringArray({ value: source.trackIds }),
+      trackIds: restoredTrackIds,
       trackSelectionMode,
       metric: typeof source.metric === 'string' && source.metric ? source.metric : defaults.metric,
       mode,
@@ -1041,47 +1057,150 @@
       return null;
     }
 
+    const parsedRecord = parsedValue as Record<string, unknown>;
     restoredUrlDatasetIdsMode = getUrlSelectionMode({
       allowDefault: true,
-      value: (parsedValue as Record<string, unknown>).datasetIds
+      value: hasOwn({ source: parsedRecord, key: 'datasetIds' }) ? parsedRecord.datasetIds : 'default'
     });
     restoredUrlCombinedDatasetIdsMode = getUrlSelectionMode({
-      value: (parsedValue as Record<string, unknown>).combinedDatasetIds
+      allowDefault: true,
+      value: hasOwn({ source: parsedRecord, key: 'combinedDatasetIds' })
+        ? parsedRecord.combinedDatasetIds
+        : 'default'
+    });
+    restoredUrlDatalogIdsMode = getUrlSelectionMode({
+      allowDefault: true,
+      value: hasOwn({ source: parsedRecord, key: 'datalogIds' })
+        ? parsedRecord.datalogIds
+        : (hasOwn({ source: parsedRecord, key: 'trackIds' }) ? parsedRecord.trackIds : 'default')
     });
 
     return normalizeStoredFilters({ value: parsedValue });
   };
 
+  const sameStringSet = ({ left, right }: { left: string[]; right: string[] }) => (
+    left.length === right.length
+    && left.every((value) => right.includes(value))
+  );
+
+  const getUrlSelectionValue = ({
+    allIds,
+    defaultIds,
+    selectedIds
+  }: {
+    allIds: string[];
+    defaultIds: string[];
+    selectedIds: string[];
+  }) => {
+    if (sameStringSet({ left: selectedIds, right: defaultIds })) {
+      return 'default';
+    }
+
+    if (!selectedIds.length) {
+      return 'none';
+    }
+
+    if (allIds.length && sameStringSet({ left: selectedIds, right: allIds })) {
+      return 'all';
+    }
+
+    return selectedIds;
+  };
+
+  const getDefaultTrackSelectionMode = ({ sourceFilters }: { sourceFilters: MapFilters }) => (
+    sourceFilters.datasetIds.length || sourceFilters.combinedDatasetIds.length ? 'all' : 'none'
+  );
+
+  const getDatalogUrlSelectionValue = ({ sourceFilters }: { sourceFilters: MapFilters }) => {
+    const defaultTrackSelectionMode = getDefaultTrackSelectionMode({ sourceFilters });
+    if (sourceFilters.trackSelectionMode === defaultTrackSelectionMode && !sourceFilters.trackIds.length) {
+      return 'default';
+    }
+
+    if (sourceFilters.trackSelectionMode === 'none') {
+      return 'none';
+    }
+
+    if (sourceFilters.trackSelectionMode === 'all') {
+      return 'all';
+    }
+
+    return sourceFilters.trackIds.length ? sourceFilters.trackIds : 'none';
+  };
+
+  const getDefaultUrlMetric = () => $sessionStore.ui?.defaultMetric || createInitialFilters().metric;
+
   const buildCompactUrlFilters = ({ nextFilters }: { nextFilters: MapFilters }) => {
     const clonedFilters = cloneFilters(nextFilters, { clearOneShotControls: true });
-    const defaultDatasetIds = getDefaultDatasetIds();
-    const selectedDatasetIds = new Set(clonedFilters.datasetIds);
-    const datasetIdsValue = !clonedFilters.datasetIds.length
-      ? 'none'
-      : (
-        datasets.length && clonedFilters.datasetIds.length === datasets.length
-          ? 'all'
-          : (
-            defaultDatasetIds.length
-            && clonedFilters.datasetIds.length === defaultDatasetIds.length
-            && defaultDatasetIds.every((datasetId) => selectedDatasetIds.has(datasetId))
-              ? 'default'
-              : clonedFilters.datasetIds
-          )
-      );
-    const combinedDatasetIdsValue = !clonedFilters.combinedDatasetIds.length
-      ? 'none'
-      : (
-        combinedDatasets.length && clonedFilters.combinedDatasetIds.length === combinedDatasets.length
-          ? 'all'
-          : clonedFilters.combinedDatasetIds
-      );
+    const defaults = createInitialFilters();
+    const compactFilters: Record<string, unknown> = {};
+    const datasetIdsValue = getUrlSelectionValue({
+      allIds: datasets.map((dataset) => dataset.id),
+      defaultIds: getDefaultDatasetIds(),
+      selectedIds: clonedFilters.datasetIds
+    });
+    const combinedDatasetIdsValue = getUrlSelectionValue({
+      allIds: combinedDatasets.map((combinedDataset) => combinedDataset.id),
+      defaultIds: [],
+      selectedIds: clonedFilters.combinedDatasetIds
+    });
+    const datalogIdsValue = getDatalogUrlSelectionValue({ sourceFilters: clonedFilters });
 
-    return {
-      ...clonedFilters,
-      datasetIds: datasetIdsValue,
-      combinedDatasetIds: combinedDatasetIdsValue
-    };
+    if (datasetIdsValue !== 'default') {
+      compactFilters.datasetIds = datasetIdsValue;
+    }
+
+    if (combinedDatasetIdsValue !== 'default') {
+      compactFilters.combinedDatasetIds = combinedDatasetIdsValue;
+    }
+
+    if (datalogIdsValue !== 'default') {
+      compactFilters.datalogIds = datalogIdsValue;
+    }
+
+    if (clonedFilters.metric !== getDefaultUrlMetric()) {
+      compactFilters.metric = clonedFilters.metric;
+    }
+
+    if (clonedFilters.mode !== defaults.mode) {
+      compactFilters.mode = clonedFilters.mode;
+    }
+
+    if (clonedFilters.mode === 'aggregate') {
+      if (clonedFilters.shape !== defaults.shape) {
+        compactFilters.shape = clonedFilters.shape;
+      }
+
+      if (clonedFilters.aggregateStat !== defaults.aggregateStat) {
+        compactFilters.aggregateStat = clonedFilters.aggregateStat;
+      }
+    }
+
+    if (clonedFilters.autoCellSize !== defaults.autoCellSize) {
+      compactFilters.autoCellSize = clonedFilters.autoCellSize;
+    }
+
+    if (!clonedFilters.autoCellSize && clonedFilters.cellSizeMeters !== defaults.cellSizeMeters) {
+      compactFilters.cellSizeMeters = clonedFilters.cellSizeMeters;
+    }
+
+    if (clonedFilters.applyExcludeAreas !== defaults.applyExcludeAreas) {
+      compactFilters.applyExcludeAreas = clonedFilters.applyExcludeAreas;
+    }
+
+    if (clonedFilters.timeFilterMode !== defaults.timeFilterMode) {
+      compactFilters.timeFilterMode = clonedFilters.timeFilterMode;
+      if (clonedFilters.timeFilterMode === 'absolute') {
+        compactFilters.timeFilterPrecision = clonedFilters.timeFilterPrecision;
+        compactFilters.timeFilterStart = clonedFilters.timeFilterStart;
+        compactFilters.timeFilterEnd = clonedFilters.timeFilterEnd;
+      } else if (clonedFilters.timeFilterMode === 'relative') {
+        compactFilters.timeFilterRelativeAmount = clonedFilters.timeFilterRelativeAmount;
+        compactFilters.timeFilterRelativeUnit = clonedFilters.timeFilterRelativeUnit;
+      }
+    }
+
+    return compactFilters;
   };
 
   const loadUrlMapFocus = () => {
@@ -1164,10 +1283,12 @@
       nextViewport
     });
     const url = new URL(window.location.href);
-    url.searchParams.set(
-      filterUrlParamName,
-      JSON.stringify(buildCompactUrlFilters({ nextFilters }))
-    );
+    const compactFilters = buildCompactUrlFilters({ nextFilters });
+    if (Object.keys(compactFilters).length) {
+      url.searchParams.set(filterUrlParamName, JSON.stringify(compactFilters));
+    } else {
+      url.searchParams.delete(filterUrlParamName);
+    }
     url.searchParams.set(mapLatUrlParamName, roundUrlCoordinate({ value: nextViewport.centerLat }).toFixed(4));
     url.searchParams.set(mapLonUrlParamName, roundUrlCoordinate({ value: nextViewport.centerLon }).toFixed(4));
     url.searchParams.set(mapZoomUrlParamName, String(Math.round(nextViewport.zoom)));
@@ -2033,34 +2154,52 @@
       datasets = sortedDatasets;
       combinedDatasets = combinedResponse.combinedDatasets;
 
+      let nextDatasetIds = filters.datasetIds;
+      let nextCombinedDatasetIds = filters.combinedDatasetIds;
+      let nextTrackIds = filters.trackIds;
+      let nextTrackSelectionMode = filters.trackSelectionMode;
+
       if (
         restoredUrlDatasetIdsMode !== 'explicit'
         || restoredUrlCombinedDatasetIdsMode !== 'explicit'
+        || restoredUrlDatalogIdsMode !== 'explicit'
       ) {
+        nextDatasetIds = restoredUrlDatasetIdsMode === 'all'
+          ? sortedDatasets.map((dataset) => dataset.id)
+          : (
+            restoredUrlDatasetIdsMode === 'default'
+              ? getDefaultDatasetIds()
+              : (
+                restoredUrlDatasetIdsMode === 'none'
+                  ? []
+                  : nextDatasetIds
+              )
+          );
+        nextCombinedDatasetIds = restoredUrlCombinedDatasetIdsMode === 'all'
+          ? combinedResponse.combinedDatasets.map((combinedDataset: CombinedDatasetOption) => combinedDataset.id)
+          : (
+            restoredUrlCombinedDatasetIdsMode === 'default' || restoredUrlCombinedDatasetIdsMode === 'none'
+              ? []
+              : nextCombinedDatasetIds
+          );
+
+        if (restoredUrlDatalogIdsMode === 'default') {
+          nextTrackIds = [];
+          nextTrackSelectionMode = nextDatasetIds.length || nextCombinedDatasetIds.length ? 'all' : 'none';
+        } else if (restoredUrlDatalogIdsMode === 'all') {
+          nextTrackIds = [];
+          nextTrackSelectionMode = 'all';
+        } else if (restoredUrlDatalogIdsMode === 'none') {
+          nextTrackIds = [];
+          nextTrackSelectionMode = 'none';
+        }
+
         filters = {
           ...filters,
-          datasetIds: (
-            restoredUrlDatasetIdsMode === 'all'
-              ? sortedDatasets.map((dataset) => dataset.id)
-              : (
-                restoredUrlDatasetIdsMode === 'default'
-                  ? getDefaultDatasetIds()
-                  : (
-                    restoredUrlDatasetIdsMode === 'none'
-                      ? []
-                      : filters.datasetIds
-                  )
-              )
-          ),
-          combinedDatasetIds: (
-            restoredUrlCombinedDatasetIdsMode === 'all'
-              ? combinedResponse.combinedDatasets.map((combinedDataset: CombinedDatasetOption) => combinedDataset.id)
-              : (
-                restoredUrlCombinedDatasetIdsMode === 'none'
-                  ? []
-                  : filters.combinedDatasetIds
-              )
-          )
+          datasetIds: nextDatasetIds,
+          combinedDatasetIds: nextCombinedDatasetIds,
+          trackIds: nextTrackIds,
+          trackSelectionMode: nextTrackSelectionMode
         };
       }
 
@@ -2292,6 +2431,13 @@
 
   const handleViewportChange = (event: CustomEvent<MapViewport>) => {
     viewport = event.detail;
+
+    if (filterUrlSyncReady) {
+      replaceUrlMapState({
+        nextFilters: autoUpdateMap ? filters : getAppliedFilters(),
+        nextViewport: event.detail
+      });
+    }
 
     if (!lookupsReady) {
       return;

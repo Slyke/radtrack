@@ -756,13 +756,15 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
   const resolveAggregateCellWithCacheInfo = async ({
     baseCell,
     cellCacheKey,
+    refreshTtlOnRead = false,
     ttlSeconds,
     sourceOnWrite
   }) => {
     const cachedCell = await cache.readJson({
       key: cellCacheKey,
       ttlSeconds,
-      includeMeta: true
+      includeMeta: true,
+      refreshTtlOnRead
     });
     if (cachedCell) {
       return {
@@ -1302,8 +1304,12 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
   };
 
   const getAggregates = async ({ user, input, correlationId = null }) => {
-    const uiConfig = await settingsService.getUiConfig();
+    const [uiConfig, userSettings] = await Promise.all([
+      settingsService.getUiConfig(),
+      settingsService.getUserSettings({ userId: user.id })
+    ]);
     const historicalQueryCacheTtlSeconds = getHistoricalQueryCacheTtlSeconds({ uiConfig });
+    const cellCacheRefreshTtlOnRead = userSettings.cellCacheRefreshTtlOnRead === true;
     const requestFilter = normalizeFilterInput({ input });
     const viewportFilter = {
       minLat: requestFilter.minLat,
@@ -1372,6 +1378,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
         dateTo: prepared.filter.dateTo,
         forceRecheck: prepared.filter.forceRecheck,
         modeBucketDecimals,
+        cellCacheRefreshTtlOnRead,
         shape: prepared.filter.shape,
         timeFilterMode: prepared.filter.timeFilterMode,
         zoom: requestFilter.zoom
@@ -1402,6 +1409,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
           context: {
             cacheKey,
             cachedCellCount: cached.value.cells.length,
+            cellCacheRefreshTtlOnRead,
             visibleCellCount: visibleCells.length,
             ttlSecondsRemaining: cached.ttlSecondsRemaining
           }
@@ -1412,6 +1420,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
           cells: await Promise.all(visibleCells.map((cell) => resolveAggregateCellWithCacheInfo({
             baseCell: cell,
             cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
+            refreshTtlOnRead: cellCacheRefreshTtlOnRead,
             ttlSeconds: historicalQueryCacheTtlSeconds,
             sourceOnWrite: 'cache'
           }))),
@@ -1532,6 +1541,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
         return resolveAggregateCellWithCacheInfo({
           baseCell,
           cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
+          refreshTtlOnRead: cellCacheRefreshTtlOnRead,
           ttlSeconds: historicalQueryCacheTtlSeconds,
           sourceOnWrite: 'computed'
         });
@@ -1549,6 +1559,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
         cellsWithCacheMeta: resolvedCells.filter((cell) => Boolean(cell.cache)).length,
         cellsWithCacheKey: resolvedCells.filter((cell) => Boolean(cell.cache?.key)).length,
         cellsWithTtl: resolvedCells.filter((cell) => cell.cache?.ttlSecondsRemaining !== null && cell.cache?.ttlSecondsRemaining !== undefined).length,
+        cellCacheRefreshTtlOnRead,
         sampleCache: resolvedCells.find((cell) => cell.cache)?.cache ?? null
       }
     });
@@ -1600,6 +1611,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
       message: 'Aggregate query cache written.',
       context: {
         cacheKey,
+        cellCacheRefreshTtlOnRead,
         responseCellCount: fullResponse.cells.length,
         returnedCellCount: resolvedCells.length,
         ttlSeconds: historicalQueryCacheTtlSeconds,

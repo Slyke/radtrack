@@ -225,6 +225,13 @@ const migrationStatements = [
     source TEXT NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
   )`,
+  `CREATE TABLE IF NOT EXISTS user_settings (
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    key_name TEXT NOT NULL,
+    value_json JSONB NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL,
+    PRIMARY KEY (user_id, key_name)
+  )`,
   `ALTER TABLE exclude_areas ADD COLUMN IF NOT EXISTS effect_type TEXT`,
   `ALTER TABLE exclude_areas ADD COLUMN IF NOT EXISTS compress_min_points INTEGER`,
   `ALTER TABLE exclude_areas ADD COLUMN IF NOT EXISTS compress_max_points INTEGER`,
@@ -233,6 +240,7 @@ const migrationStatements = [
   `ALTER TABLE exclude_areas ALTER COLUMN effect_type SET NOT NULL`,
   `ALTER TABLE audit_events ADD COLUMN IF NOT EXISTS scope_user_id TEXT REFERENCES users(id) ON DELETE SET NULL`,
   `UPDATE audit_events SET scope_user_id = COALESCE(scope_user_id, actor_user_id) WHERE scope_user_id IS NULL`,
+  `CREATE INDEX IF NOT EXISTS idx_user_settings_key_name ON user_settings(key_name)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id)`,
   `CREATE INDEX IF NOT EXISTS idx_sessions_expires_at ON sessions(expires_at)`,
   `CREATE INDEX IF NOT EXISTS idx_readings_datalog_id ON readings(datalog_id)`,

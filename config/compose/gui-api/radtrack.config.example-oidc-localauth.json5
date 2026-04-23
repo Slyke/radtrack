@@ -71,6 +71,7 @@
   },
   aggregation: {
     modeBucketDecimals: 2,
-    cacheTtlSeconds: 3600
+    cacheTtlSeconds: 3600,
+    cellCacheRefreshTtlOnRead: false
   }
 }

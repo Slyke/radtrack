@@ -229,7 +229,11 @@ export const loadRuntimeConfig = async ({ correlationId = null } = {}) => {
     },
     aggregation: {
       modeBucketDecimals: asInteger({ value: rawConfig?.aggregation?.modeBucketDecimals, fallback: 2 }),
-      cacheTtlSeconds: asInteger({ value: rawConfig?.aggregation?.cacheTtlSeconds, fallback: 3600 })
+      cacheTtlSeconds: asInteger({ value: rawConfig?.aggregation?.cacheTtlSeconds, fallback: 3600 }),
+      cellCacheRefreshTtlOnRead: asBoolean({
+        value: rawConfig?.aggregation?.cellCacheRefreshTtlOnRead,
+        fallback: false
+      })
     },
     session: {
       secret: requiredString({ value: rawSecrets?.sessionSecret, field: 'sessionSecret', correlationId })

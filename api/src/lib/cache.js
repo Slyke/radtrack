@@ -39,11 +39,18 @@ export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
     });
   }
 
-  const readJson = async ({ key, ttlSeconds: _ttlSeconds, includeMeta = false }) => {
-    const [value, ttlValue] = await Promise.all([
-      client.get(key),
-      includeMeta ? client.ttl(key) : Promise.resolve(null)
-    ]);
+  const readJson = async ({
+    key,
+    ttlSeconds = null,
+    includeMeta = false,
+    refreshTtlOnRead = false
+  }) => {
+    const value = await client.get(key);
+    let ttlRefreshed = false;
+    if (value && refreshTtlOnRead && Number.isFinite(ttlSeconds) && ttlSeconds > 0) {
+      ttlRefreshed = Boolean(await client.expire(key, ttlSeconds));
+    }
+    const ttlValue = includeMeta ? await client.ttl(key) : null;
     logFeature({
       caller: 'cache::readJson',
       feature: 'cache',
@@ -54,6 +61,8 @@ export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
       context: {
         key,
         includeMeta,
+        refreshTtlOnRead,
+        ttlRefreshed,
         ttlSecondsRemaining: typeof ttlValue === 'number' && ttlValue >= 0 ? ttlValue : null
       }
     });
