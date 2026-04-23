@@ -130,6 +130,10 @@
     zoom: number;
   };
 
+  type TimeFilterMode = 'none' | 'absolute' | 'relative';
+  type TimeFilterPrecision = 'date' | 'datetime';
+  type TimeFilterRelativeUnit = 'hours' | 'days';
+
   type MapFilters = {
     datasetIds: string[];
     combinedDatasetIds: string[];
@@ -142,6 +146,13 @@
     cellSizeMeters: number;
     autoCellSize: boolean;
     applyExcludeAreas: boolean;
+    timeFilterMode: TimeFilterMode;
+    timeFilterPrecision: TimeFilterPrecision;
+    timeFilterStart: string;
+    timeFilterEnd: string;
+    timeFilterRelativeAmount: number;
+    timeFilterRelativeUnit: TimeFilterRelativeUnit;
+    forceRecheck: boolean;
   };
 
   type AppliedMapFilters = MapFilters & {
@@ -213,7 +224,14 @@
     aggregateStat: 'mean',
     cellSizeMeters: 250,
     autoCellSize: true,
-    applyExcludeAreas: true
+    applyExcludeAreas: true,
+    timeFilterMode: 'none',
+    timeFilterPrecision: 'datetime',
+    timeFilterStart: '',
+    timeFilterEnd: '',
+    timeFilterRelativeAmount: 24,
+    timeFilterRelativeUnit: 'hours',
+    forceRecheck: false
   });
 
   const createInitialPopupFields = (): PopupFields => ({
@@ -240,7 +258,10 @@
     zoom: source.zoom
   });
 
-  const cloneFilters = (source: MapFilters | AppliedMapFilters): MapFilters => ({
+  const cloneFilters = (
+    source: MapFilters | AppliedMapFilters,
+    { clearOneShotControls = false }: { clearOneShotControls?: boolean } = {}
+  ): MapFilters => ({
     datasetIds: [...source.datasetIds],
     combinedDatasetIds: [...source.combinedDatasetIds],
     trackIds: [...source.trackIds],
@@ -251,7 +272,14 @@
     aggregateStat: source.aggregateStat,
     cellSizeMeters: Number(source.cellSizeMeters),
     autoCellSize: source.autoCellSize,
-    applyExcludeAreas: source.applyExcludeAreas
+    applyExcludeAreas: source.applyExcludeAreas,
+    timeFilterMode: source.timeFilterMode,
+    timeFilterPrecision: source.timeFilterPrecision,
+    timeFilterStart: source.timeFilterStart,
+    timeFilterEnd: source.timeFilterEnd,
+    timeFilterRelativeAmount: Number(source.timeFilterRelativeAmount),
+    timeFilterRelativeUnit: source.timeFilterRelativeUnit,
+    forceRecheck: clearOneShotControls ? false : source.forceRecheck
   });
 
   const clonePopupStateSnapshot = (source: PopupStateSnapshot): PopupStateSnapshot => ({
@@ -259,14 +287,203 @@
     touched: { ...source.touched }
   });
 
-  const cloneAppliedFilters = (source: AppliedMapFilters): AppliedMapFilters => ({
-    ...cloneFilters(source),
+  const cloneAppliedFilters = (
+    source: AppliedMapFilters,
+    { clearOneShotControls = false }: { clearOneShotControls?: boolean } = {}
+  ): AppliedMapFilters => ({
+    ...cloneFilters(source, { clearOneShotControls }),
     appliedCellSizeMeters: Number(source.appliedCellSizeMeters)
   });
 
   const toFiniteNumber = (value: unknown) => {
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const padDatePart = (value: number) => String(value).padStart(2, '0');
+
+  const formatLocalDateInputValue = ({ value }: { value: Date }) => [
+    value.getFullYear(),
+    padDatePart(value.getMonth() + 1),
+    padDatePart(value.getDate())
+  ].join('-');
+
+  const formatLocalDateTimeInputValue = ({ value }: { value: Date }) => (
+    `${formatLocalDateInputValue({ value })}T${padDatePart(value.getHours())}:${padDatePart(value.getMinutes())}`
+  );
+
+  const getDatePortion = ({ value }: { value: string }) => {
+    const trimmedValue = String(value ?? '').trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(trimmedValue) ? trimmedValue.slice(0, 10) : '';
+  };
+
+  const getDefaultAbsoluteTimeRange = ({
+    precision
+  }: {
+    precision: TimeFilterPrecision;
+  }) => {
+    const now = new Date();
+    if (precision === 'date') {
+      const today = formatLocalDateInputValue({ value: now });
+      return {
+        start: today,
+        end: today
+      };
+    }
+
+    const oneHourAgo = new Date(now.getTime() - (60 * 60 * 1000));
+    return {
+      start: formatLocalDateTimeInputValue({ value: oneHourAgo }),
+      end: formatLocalDateTimeInputValue({ value: now })
+    };
+  };
+
+  const localDateToIso = ({
+    value,
+    boundary
+  }: {
+    value: string;
+    boundary: 'start' | 'end';
+  }) => {
+    const [yearValue, monthValue, dayValue] = value.split('-').map((entry) => Number(entry));
+    if (![yearValue, monthValue, dayValue].every((entry) => Number.isInteger(entry))) {
+      return null;
+    }
+
+    const date = boundary === 'start'
+      ? new Date(yearValue, monthValue - 1, dayValue, 0, 0, 0, 0)
+      : new Date(yearValue, monthValue - 1, dayValue + 1, 0, 0, 0, -1);
+
+    return Number.isNaN(date.getTime()) ? null : date.toISOString();
+  };
+
+  const localDateTimeToIso = ({ value }: { value: string }) => {
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  };
+
+  const resolveAbsoluteTimeWindow = ({
+    sourceFilters
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+  }) => {
+    if (sourceFilters.timeFilterMode !== 'absolute') {
+      return null;
+    }
+
+    if (!sourceFilters.timeFilterStart || !sourceFilters.timeFilterEnd) {
+      return null;
+    }
+
+    const dateFrom = sourceFilters.timeFilterPrecision === 'date'
+      ? localDateToIso({
+          value: sourceFilters.timeFilterStart,
+          boundary: 'start'
+        })
+      : localDateTimeToIso({ value: sourceFilters.timeFilterStart });
+    const dateTo = sourceFilters.timeFilterPrecision === 'date'
+      ? localDateToIso({
+          value: sourceFilters.timeFilterEnd,
+          boundary: 'end'
+        })
+      : localDateTimeToIso({ value: sourceFilters.timeFilterEnd });
+
+    if (!dateFrom || !dateTo) {
+      return null;
+    }
+
+    return {
+      dateFrom,
+      dateTo,
+      endLocalDate: getDatePortion({ value: sourceFilters.timeFilterEnd })
+    };
+  };
+
+  const getTimeFilterValidationKey = ({
+    sourceFilters
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+  }) => {
+    if (sourceFilters.timeFilterMode === 'none') {
+      return null;
+    }
+
+    if (sourceFilters.timeFilterMode === 'relative') {
+      const relativeAmount = toFiniteNumber(sourceFilters.timeFilterRelativeAmount);
+      return Number.isInteger(relativeAmount) && relativeAmount !== null && relativeAmount > 0
+        ? null
+        : 'radtrack-map_time_filter_relative_invalid';
+    }
+
+    if (!sourceFilters.timeFilterStart || !sourceFilters.timeFilterEnd) {
+      return 'radtrack-map_time_filter_absolute_required';
+    }
+
+    const resolved = resolveAbsoluteTimeWindow({ sourceFilters });
+    if (!resolved) {
+      return 'radtrack-map_time_filter_invalid';
+    }
+
+    return resolved.dateFrom <= resolved.dateTo
+      ? null
+      : 'radtrack-map_time_filter_range_invalid';
+  };
+
+  const buildTimeFilterQuery = ({
+    sourceFilters
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+  }) => {
+    const query: Record<string, unknown> = {};
+
+    if (sourceFilters.timeFilterMode === 'absolute') {
+      const resolved = resolveAbsoluteTimeWindow({ sourceFilters });
+      const currentLocalDate = formatLocalDateInputValue({ value: new Date() });
+      query.timeFilterMode = 'absolute';
+      query.dateFrom = resolved?.dateFrom ?? null;
+      query.dateTo = resolved?.dateTo ?? null;
+      query.historicalCacheEligible = Boolean(
+        resolved?.endLocalDate
+        && resolved.endLocalDate < currentLocalDate
+      );
+    } else if (sourceFilters.timeFilterMode === 'relative') {
+      query.timeFilterMode = 'relative';
+      query.relativeAmount = Math.max(1, Math.trunc(toFiniteNumber(sourceFilters.timeFilterRelativeAmount) ?? 0));
+      query.relativeUnit = sourceFilters.timeFilterRelativeUnit;
+    }
+
+    if (sourceFilters.forceRecheck) {
+      query.forceRecheck = true;
+    }
+
+    return query;
+  };
+
+  const normalizeTimeFilterInputsForPrecision = ({
+    sourceFilters,
+    precision
+  }: {
+    sourceFilters: MapFilters;
+    precision: TimeFilterPrecision;
+  }) => {
+    const defaults = getDefaultAbsoluteTimeRange({ precision });
+    if (precision === 'date') {
+      return {
+        start: getDatePortion({ value: sourceFilters.timeFilterStart }) || defaults.start,
+        end: getDatePortion({ value: sourceFilters.timeFilterEnd }) || defaults.end
+      };
+    }
+
+    const startDatePortion = getDatePortion({ value: sourceFilters.timeFilterStart });
+    const endDatePortion = getDatePortion({ value: sourceFilters.timeFilterEnd });
+    return {
+      start: sourceFilters.timeFilterStart.includes('T')
+        ? sourceFilters.timeFilterStart
+        : (startDatePortion ? `${startDatePortion}T00:00` : defaults.start),
+      end: sourceFilters.timeFilterEnd.includes('T')
+        ? sourceFilters.timeFilterEnd
+        : (endDatePortion ? `${endDatePortion}T23:59` : defaults.end)
+    };
   };
 
   const booleanRecordChanged = ({
@@ -341,7 +558,14 @@
     aggregateStat: sourceFilters.aggregateStat,
     cellSizeMeters: sourceFilters.cellSizeMeters,
     autoCellSize: sourceFilters.autoCellSize,
-    applyExcludeAreas: sourceFilters.applyExcludeAreas
+    applyExcludeAreas: sourceFilters.applyExcludeAreas,
+    timeFilterMode: sourceFilters.timeFilterMode,
+    timeFilterPrecision: sourceFilters.timeFilterPrecision,
+    timeFilterStart: sourceFilters.timeFilterStart,
+    timeFilterEnd: sourceFilters.timeFilterEnd,
+    timeFilterRelativeAmount: sourceFilters.timeFilterRelativeAmount,
+    timeFilterRelativeUnit: sourceFilters.timeFilterRelativeUnit,
+    forceRecheck: sourceFilters.forceRecheck
   });
 
   const serializeQuery = ({
@@ -362,6 +586,12 @@
     cellSizeMeters: sourceFilters.appliedCellSizeMeters,
     autoCellSize: sourceFilters.autoCellSize,
     applyExcludeAreas: sourceFilters.applyExcludeAreas,
+    timeFilterMode: sourceFilters.timeFilterMode,
+    timeFilterPrecision: sourceFilters.timeFilterPrecision,
+    timeFilterStart: sourceFilters.timeFilterStart,
+    timeFilterEnd: sourceFilters.timeFilterEnd,
+    timeFilterRelativeAmount: sourceFilters.timeFilterRelativeAmount,
+    timeFilterRelativeUnit: sourceFilters.timeFilterRelativeUnit,
     minLat: sourceViewport.minLat,
     maxLat: sourceViewport.maxLat,
     minLon: sourceViewport.minLon,
@@ -1111,6 +1341,34 @@
 
     return t('radtrack-map_selected_count-label', { count: filters.trackIds.length });
   });
+  const timeFilterValidationMessage = $derived.by(() => {
+    const key = getTimeFilterValidationKey({ sourceFilters: filters });
+    return key ? t(key) : null;
+  });
+  const timeFilterSummary = $derived.by(() => {
+    if (filters.timeFilterMode === 'none') {
+      return t('radtrack-common_none');
+    }
+
+    if (filters.timeFilterMode === 'relative') {
+      const amount = Math.max(1, Math.trunc(toFiniteNumber(filters.timeFilterRelativeAmount) ?? 0));
+      const unitKey = filters.timeFilterRelativeUnit === 'days'
+        ? (amount === 1 ? 'radtrack-map_time_filter_day-label' : 'radtrack-map_time_filter_days-label')
+        : (amount === 1 ? 'radtrack-map_time_filter_hour-label' : 'radtrack-map_time_filter_hours-label');
+      return t('radtrack-map_time_filter_since_summary-label', {
+        amount: formatCount(amount),
+        unit: t(unitKey)
+      });
+    }
+
+    if (!filters.timeFilterStart || !filters.timeFilterEnd || timeFilterValidationMessage) {
+      return t('radtrack-map_time_filter_incomplete-label');
+    }
+
+    const startValue = filters.timeFilterStart.replace('T', ' ');
+    const endValue = filters.timeFilterEnd.replace('T', ' ');
+    return `${startValue} -> ${endValue}`;
+  });
   const basemapOptions = $derived.by<BasemapOption[]>(() => [
     {
       key: 'default',
@@ -1164,6 +1422,16 @@
     })
   );
 
+  const canUpdateMap = $derived.by(() => (
+    !loading
+    && !timeFilterValidationMessage
+    && (
+      hasPendingSidebarChanges()
+      || filters.timeFilterMode === 'relative'
+      || filters.forceRecheck
+    )
+  ));
+
   const clearScheduledSidebarUpdate = () => {
     if (!sidebarUpdateTimer) {
       return;
@@ -1204,10 +1472,14 @@
 
   const applySidebarFilters = () => {
     clearScheduledSidebarUpdate();
+    if (timeFilterValidationMessage) {
+      return;
+    }
+
     const nextPopupState = getPendingPopupStateSnapshot();
     const nextSnapshot = getCurrentQuerySnapshot();
 
-    if (nextSnapshot.key === activeQuery?.key) {
+    if (nextSnapshot.key === activeQuery?.key && !nextSnapshot.filters.forceRecheck) {
       appliedPopupState = nextPopupState;
       return;
     }
@@ -1221,7 +1493,7 @@
   const scheduleSidebarAutoUpdate = () => {
     clearScheduledSidebarUpdate();
 
-    if (!autoUpdateMap || !lookupsReady || !hasPendingSidebarChanges()) {
+    if (!autoUpdateMap || !lookupsReady || timeFilterValidationMessage || !hasPendingSidebarChanges()) {
       return;
     }
 
@@ -1241,7 +1513,8 @@
     maxLat: snapshot.viewport.maxLat,
     minLon: snapshot.viewport.minLon,
     maxLon: snapshot.viewport.maxLon,
-    applyExcludeAreas: snapshot.filters.applyExcludeAreas
+    applyExcludeAreas: snapshot.filters.applyExcludeAreas,
+    ...buildTimeFilterQuery({ sourceFilters: snapshot.filters })
   });
 
   const loadLookups = async () => {
@@ -1342,9 +1615,15 @@
       if (completedSuccessfully) {
         activeQuery = {
           ...snapshot,
-          filters: cloneAppliedFilters(snapshot.filters)
+          filters: cloneAppliedFilters(snapshot.filters, { clearOneShotControls: true })
         };
         appliedPopupState = clonePopupStateSnapshot(popupState);
+        if (snapshot.filters.forceRecheck && filters.forceRecheck) {
+          filters = {
+            ...filters,
+            forceRecheck: false
+          };
+        }
       }
 
       loading = false;
@@ -1406,11 +1685,58 @@
   };
 
   const updateMap = () => {
-    if (loading) {
+    if (!canUpdateMap) {
+      return;
+    }
+
+    const nextPopupState = getPendingPopupStateSnapshot();
+    const nextSnapshot = getCurrentQuerySnapshot();
+    if (nextSnapshot.key === activeQuery?.key && nextSnapshot.filters.timeFilterMode === 'relative') {
+      requestMapData({
+        popupState: nextPopupState,
+        snapshot: nextSnapshot
+      });
       return;
     }
 
     applySidebarFilters();
+  };
+
+  const handleTimeFilterModeChange = () => {
+    if (filters.timeFilterMode === 'absolute') {
+      const nextRange = normalizeTimeFilterInputsForPrecision({
+        sourceFilters: filters,
+        precision: filters.timeFilterPrecision
+      });
+      filters = {
+        ...filters,
+        timeFilterStart: nextRange.start,
+        timeFilterEnd: nextRange.end
+      };
+    }
+
+    if (filters.timeFilterMode === 'relative' && getTimeFilterValidationKey({ sourceFilters: filters })) {
+      filters = {
+        ...filters,
+        timeFilterRelativeAmount: 24,
+        timeFilterRelativeUnit: 'hours'
+      };
+    }
+
+    handleFilterChange();
+  };
+
+  const handleTimeFilterPrecisionChange = () => {
+    const nextRange = normalizeTimeFilterInputsForPrecision({
+      sourceFilters: filters,
+      precision: filters.timeFilterPrecision
+    });
+    filters = {
+      ...filters,
+      timeFilterStart: nextRange.start,
+      timeFilterEnd: nextRange.end
+    };
+    handleFilterChange();
   };
 
   const handleFilterChange = () => {
@@ -1585,7 +1911,7 @@
         <div class="map-panel-header">
           <h2>{t('radtrack-common_filters-label')}</h2>
           {#if !autoUpdateMap}
-            <button class="primary" disabled={loading || !hasPendingSidebarChanges()} onclick={updateMap}>
+            <button class="primary" disabled={!canUpdateMap} onclick={updateMap}>
               {t('radtrack-map_update-button')}
             </button>
           {/if}
@@ -1598,160 +1924,261 @@
 
         <div class="form-grid">
           <div class="selector-accordion-stack">
-          <details class="selector-accordion" open>
-            <summary>
-              <span>{t('radtrack-datasets_title')}</span>
-              <span class="settings-accordion-meta">
-                <span class={selectionChipClass({ count: filters.datasetIds.length })}>
-                  {filters.datasetIds.length
-                    ? t('radtrack-map_selected_count-label', { count: filters.datasetIds.length })
-                    : t('radtrack-common_none')}
+            <details class="selector-accordion map-data-accordion">
+              <summary>
+                <span>{t('radtrack-map_data-title')}</span>
+                <span class="settings-accordion-meta">
+                  <span aria-hidden="true" class="settings-accordion-icon"></span>
                 </span>
-                <span aria-hidden="true" class="settings-accordion-icon"></span>
-              </span>
-            </summary>
+              </summary>
 
-            <div class="selection-stack">
-              <div class="actions">
-                <button onclick={handleDatasetSelectAll} disabled={!datasets.length || filters.datasetIds.length === datasets.length}>
-                  {t('radtrack-map_tracks_all-button')}
-                </button>
-                <button onclick={handleDatasetClearAll} disabled={!filters.datasetIds.length}>
-                  {t('radtrack-map_tracks_none-button')}
-                </button>
-              </div>
-
-              <div class="selection-list selection-list-tall">
-                {#each datasets as dataset}
-                  <label class="selection-item">
-                    <input
-                      checked={filters.datasetIds.includes(dataset.id)}
-                      onchange={() => {
-                        handleDatasetToggle(dataset.id);
-                      }}
-                      type="checkbox"
-                    />
-                    <span class="selection-copy">
-                      <span class="selection-title" title={dataset.name}>{dataset.name}</span>
-                      <span class="selection-meta-row">{formatDatasetOptionSummary(dataset)}</span>
-                      <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(dataset.id) })}</span>
-                    </span>
-                  </label>
-                {/each}
-              </div>
-            </div>
-          </details>
-
-          <details class="selector-accordion">
-            <summary>
-              <span>{t('radtrack-common_combined_datasets-label')}</span>
-              <span class="settings-accordion-meta">
-                <span class={selectionChipClass({ count: filters.combinedDatasetIds.length })}>
-                  {filters.combinedDatasetIds.length
-                    ? t('radtrack-map_selected_count-label', { count: filters.combinedDatasetIds.length })
-                    : t('radtrack-common_none')}
-                </span>
-                <span aria-hidden="true" class="settings-accordion-icon"></span>
-              </span>
-            </summary>
-
-            <div class="selection-stack">
-              <div class="selection-help muted">{t('radtrack-map_combined_datasets-help')}</div>
-
-              {#if combinedDatasets.length}
-                <div class="actions">
-                  <button
-                    onclick={handleCombinedDatasetSelectAll}
-                    disabled={filters.combinedDatasetIds.length === combinedDatasets.length}
-                  >
-                    {t('radtrack-map_tracks_all-button')}
-                  </button>
-                  <button onclick={handleCombinedDatasetClearAll} disabled={!filters.combinedDatasetIds.length}>
-                    {t('radtrack-map_tracks_none-button')}
-                  </button>
-                </div>
-
-                <div class="selection-list selection-list-tall">
-                  {#each combinedDatasets as combinedDataset}
-                    <label class="selection-item">
-                      <input
-                        checked={filters.combinedDatasetIds.includes(combinedDataset.id)}
-                        onchange={() => {
-                          handleCombinedDatasetToggle(combinedDataset.id);
-                        }}
-                        type="checkbox"
-                      />
-                      <span class="selection-copy">
-                        <span class="selection-title" title={combinedDataset.name}>{combinedDataset.name}</span>
-                        <span class="selection-meta-row">{formatCombinedDatasetOptionSummary(combinedDataset)}</span>
-                        <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(combinedDataset.id) })}</span>
+              <div class="map-data-accordion-body">
+                <details class="selector-accordion">
+                  <summary>
+                    <span>{t('radtrack-datasets_title')}</span>
+                    <span class="settings-accordion-meta">
+                      <span class={selectionChipClass({ count: filters.datasetIds.length })}>
+                        {filters.datasetIds.length
+                          ? t('radtrack-map_selected_count-label', { count: filters.datasetIds.length })
+                          : t('radtrack-common_none')}
                       </span>
-                    </label>
-                  {/each}
-                </div>
-              {:else}
-                <div class="selection-empty muted">{t('radtrack-map_combined_datasets-empty')}</div>
-              {/if}
-            </div>
-          </details>
+                      <span aria-hidden="true" class="settings-accordion-icon"></span>
+                    </span>
+                  </summary>
 
-          <details class="selector-accordion">
-            <summary>
-              <span>{t('radtrack-common_tracks-label')}</span>
-              <span class="settings-accordion-meta">
-                <span class={filters.trackSelectionMode === 'all' ? 'chip start' : selectionChipClass({ count: filters.trackIds.length })}>
-                  {trackSelectionSummary}
-                </span>
-                <span aria-hidden="true" class="settings-accordion-icon"></span>
-              </span>
-            </summary>
+                  <div class="selection-stack">
+                    <div class="actions">
+                      <button onclick={handleDatasetSelectAll} disabled={!datasets.length || filters.datasetIds.length === datasets.length}>
+                        {t('radtrack-map_tracks_all-button')}
+                      </button>
+                      <button onclick={handleDatasetClearAll} disabled={!filters.datasetIds.length}>
+                        {t('radtrack-map_tracks_none-button')}
+                      </button>
+                    </div>
 
-            <div class="selection-stack">
-              {#if filters.datasetIds.length}
-                <div class="actions">
-                  <button onclick={handleTrackSelectAll} disabled={filters.trackSelectionMode === 'all' || !selectedTrackGroups.length}>
-                    {t('radtrack-map_tracks_all-button')}
-                  </button>
-                  <button onclick={handleTrackClearAll} disabled={filters.trackSelectionMode === 'none'}>
-                    {t('radtrack-map_tracks_none-button')}
-                  </button>
-                </div>
+                    <div class="selection-list selection-list-tall">
+                      {#each datasets as dataset}
+                        <label class="selection-item">
+                          <input
+                            checked={filters.datasetIds.includes(dataset.id)}
+                            onchange={() => {
+                              handleDatasetToggle(dataset.id);
+                            }}
+                            type="checkbox"
+                          />
+                          <span class="selection-copy">
+                            <span class="selection-title" title={dataset.name}>{dataset.name}</span>
+                            <span class="selection-meta-row">{formatDatasetOptionSummary(dataset)}</span>
+                            <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(dataset.id) })}</span>
+                          </span>
+                        </label>
+                      {/each}
+                    </div>
+                  </div>
+                </details>
 
-                {#if selectedTrackGroups.length}
-                  <div class="selection-list selection-list-tall">
-                    {#each selectedTrackGroups as group}
-                      <div class="track-group">
-                        <div class="track-group-title" title={group.datasetName}>{group.datasetName}</div>
+                <details class="selector-accordion">
+                  <summary>
+                    <span>{t('radtrack-common_combined_datasets-label')}</span>
+                    <span class="settings-accordion-meta">
+                      <span class={selectionChipClass({ count: filters.combinedDatasetIds.length })}>
+                        {filters.combinedDatasetIds.length
+                          ? t('radtrack-map_selected_count-label', { count: filters.combinedDatasetIds.length })
+                          : t('radtrack-common_none')}
+                      </span>
+                      <span aria-hidden="true" class="settings-accordion-icon"></span>
+                    </span>
+                  </summary>
 
-                        {#each group.tracks as track}
-                          <label class="selection-item selection-item-compact">
+                  <div class="selection-stack">
+                    <div class="selection-help muted">{t('radtrack-map_combined_datasets-help')}</div>
+
+                    {#if combinedDatasets.length}
+                      <div class="actions">
+                        <button
+                          onclick={handleCombinedDatasetSelectAll}
+                          disabled={filters.combinedDatasetIds.length === combinedDatasets.length}
+                        >
+                          {t('radtrack-map_tracks_all-button')}
+                        </button>
+                        <button onclick={handleCombinedDatasetClearAll} disabled={!filters.combinedDatasetIds.length}>
+                          {t('radtrack-map_tracks_none-button')}
+                        </button>
+                      </div>
+
+                      <div class="selection-list selection-list-tall">
+                        {#each combinedDatasets as combinedDataset}
+                          <label class="selection-item">
                             <input
-                              checked={isTrackChecked({ trackId: track.id })}
+                              checked={filters.combinedDatasetIds.includes(combinedDataset.id)}
                               onchange={() => {
-                                handleTrackToggle(track.id);
+                                handleCombinedDatasetToggle(combinedDataset.id);
                               }}
                               type="checkbox"
                             />
                             <span class="selection-copy">
-                              <span class="selection-title" title={track.trackName ?? `${t('radtrack-layout_track_page-label')} ${shortId(track.id)}`}>
-                                {track.trackName ?? `${t('radtrack-layout_track_page-label')} ${shortId(track.id)}`}
-                              </span>
-                              <span class="selection-meta-row">{formatTrackOptionSummary(track)}</span>
-                              <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(track.id) })}</span>
+                              <span class="selection-title" title={combinedDataset.name}>{combinedDataset.name}</span>
+                              <span class="selection-meta-row">{formatCombinedDatasetOptionSummary(combinedDataset)}</span>
+                              <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(combinedDataset.id) })}</span>
                             </span>
                           </label>
                         {/each}
                       </div>
-                    {/each}
+                    {:else}
+                      <div class="selection-empty muted">{t('radtrack-map_combined_datasets-empty')}</div>
+                    {/if}
                   </div>
-                {:else if loadingTrackDatasetIds.length}
-                  <div class="selection-empty muted">{t('radtrack-common_loading-label')}</div>
-                {:else}
-                  <div class="selection-empty muted">{t('radtrack-map_tracks_empty')}</div>
+                </details>
+
+                <details class="selector-accordion">
+                  <summary>
+                    <span>{t('radtrack-common_tracks-label')}</span>
+                    <span class="settings-accordion-meta">
+                      <span class={filters.trackSelectionMode === 'all' ? 'chip start' : selectionChipClass({ count: filters.trackIds.length })}>
+                        {trackSelectionSummary}
+                      </span>
+                      <span aria-hidden="true" class="settings-accordion-icon"></span>
+                    </span>
+                  </summary>
+
+                  <div class="selection-stack">
+                    {#if filters.datasetIds.length}
+                      <div class="actions">
+                        <button onclick={handleTrackSelectAll} disabled={filters.trackSelectionMode === 'all' || !selectedTrackGroups.length}>
+                          {t('radtrack-map_tracks_all-button')}
+                        </button>
+                        <button onclick={handleTrackClearAll} disabled={filters.trackSelectionMode === 'none'}>
+                          {t('radtrack-map_tracks_none-button')}
+                        </button>
+                      </div>
+
+                      {#if selectedTrackGroups.length}
+                        <div class="selection-list selection-list-tall">
+                          {#each selectedTrackGroups as group}
+                            <div class="track-group">
+                              <div class="track-group-title" title={group.datasetName}>{group.datasetName}</div>
+
+                              {#each group.tracks as track}
+                                <label class="selection-item selection-item-compact">
+                                  <input
+                                    checked={isTrackChecked({ trackId: track.id })}
+                                    onchange={() => {
+                                      handleTrackToggle(track.id);
+                                    }}
+                                    type="checkbox"
+                                  />
+                                  <span class="selection-copy">
+                                    <span class="selection-title" title={track.trackName ?? `${t('radtrack-layout_track_page-label')} ${shortId(track.id)}`}>
+                                      {track.trackName ?? `${t('radtrack-layout_track_page-label')} ${shortId(track.id)}`}
+                                    </span>
+                                    <span class="selection-meta-row">{formatTrackOptionSummary(track)}</span>
+                                    <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(track.id) })}</span>
+                                  </span>
+                                </label>
+                              {/each}
+                            </div>
+                          {/each}
+                        </div>
+                      {:else if loadingTrackDatasetIds.length}
+                        <div class="selection-empty muted">{t('radtrack-common_loading-label')}</div>
+                      {:else}
+                        <div class="selection-empty muted">{t('radtrack-map_tracks_empty')}</div>
+                      {/if}
+                    {:else}
+                      <div class="selection-empty muted">{t('radtrack-map_tracks_require_dataset')}</div>
+                    {/if}
+                  </div>
+                </details>
+
+                <hr class="map-data-divider" />
+              </div>
+            </details>
+
+          <details class="selector-accordion">
+            <summary>
+              <span>{t('radtrack-map_time_filter-title')}</span>
+              <span class="settings-accordion-meta">
+                {#if filters.forceRecheck}
+                  <span class="chip warning">{t('radtrack-map_force_recheck-chip')}</span>
                 {/if}
-              {:else}
-                <div class="selection-empty muted">{t('radtrack-map_tracks_require_dataset')}</div>
+                <span class={filters.timeFilterMode === 'none' ? 'chip subtle' : 'chip start'}>
+                  {timeFilterSummary}
+                </span>
+                <span aria-hidden="true" class="settings-accordion-icon"></span>
+              </span>
+            </summary>
+
+            <div class="selection-stack time-filter-stack">
+              <label>
+                <div class="muted">{t('radtrack-map_time_filter_mode-label')}</div>
+                <select bind:value={filters.timeFilterMode} onchange={handleTimeFilterModeChange}>
+                  <option value="none">{t('radtrack-map_time_filter_mode_none-label')}</option>
+                  <option value="absolute">{t('radtrack-map_time_filter_mode_absolute-label')}</option>
+                  <option value="relative">{t('radtrack-map_time_filter_mode_relative-label')}</option>
+                </select>
+              </label>
+
+              {#if filters.timeFilterMode === 'absolute'}
+                <label>
+                  <div class="muted">{t('radtrack-map_time_filter_precision-label')}</div>
+                  <select bind:value={filters.timeFilterPrecision} onchange={handleTimeFilterPrecisionChange}>
+                    <option value="datetime">{t('radtrack-map_time_filter_precision_datetime-label')}</option>
+                    <option value="date">{t('radtrack-map_time_filter_precision_date-label')}</option>
+                  </select>
+                </label>
+
+                <div class="grid cols-2 time-filter-range-grid">
+                  <label>
+                    <div class="muted">{t('radtrack-map_time_filter_start-label')}</div>
+                    {#if filters.timeFilterPrecision === 'date'}
+                      <input bind:value={filters.timeFilterStart} oninput={handleFilterChange} type="date" />
+                    {:else}
+                      <input bind:value={filters.timeFilterStart} oninput={handleFilterChange} type="datetime-local" />
+                    {/if}
+                  </label>
+
+                  <label>
+                    <div class="muted">{t('radtrack-map_time_filter_end-label')}</div>
+                    {#if filters.timeFilterPrecision === 'date'}
+                      <input bind:value={filters.timeFilterEnd} oninput={handleFilterChange} type="date" />
+                    {:else}
+                      <input bind:value={filters.timeFilterEnd} oninput={handleFilterChange} type="datetime-local" />
+                    {/if}
+                  </label>
+                </div>
+              {:else if filters.timeFilterMode === 'relative'}
+                <div class="grid cols-2 time-filter-range-grid">
+                  <label>
+                    <div class="muted">{t('radtrack-map_time_filter_since_amount-label')}</div>
+                    <input
+                      bind:value={filters.timeFilterRelativeAmount}
+                      min="1"
+                      oninput={handleFilterChange}
+                      step="1"
+                      type="number"
+                    />
+                  </label>
+
+                  <label>
+                    <div class="muted">{t('radtrack-map_time_filter_since_unit-label')}</div>
+                    <select bind:value={filters.timeFilterRelativeUnit} onchange={handleFilterChange}>
+                      <option value="hours">{t('radtrack-map_time_filter_hours-label')}</option>
+                      <option value="days">{t('radtrack-map_time_filter_days-label')}</option>
+                    </select>
+                  </label>
+                </div>
+
               {/if}
+
+              <label class="checkbox-field">
+                <input bind:checked={filters.forceRecheck} onchange={handleFilterChange} type="checkbox" />
+                <span>{t('radtrack-map_force_recheck-label')}</span>
+              </label>
+
+              {#if timeFilterValidationMessage}
+                <div class="selection-empty warning-text">{timeFilterValidationMessage}</div>
+              {/if}
+
             </div>
           </details>
           </div>
@@ -2037,7 +2464,7 @@
 
   .map-layout {
     display: grid;
-    grid-template-columns: minmax(22rem, 30rem) minmax(0, 1fr);
+    grid-template-columns: minmax(22rem, 33.75rem) minmax(0, 1fr);
     gap: var(--space-4);
     align-items: stretch;
     width: 100%;
@@ -2114,6 +2541,19 @@
   .selector-accordion-stack {
     display: grid;
     gap: var(--space-2);
+  }
+
+  .map-data-accordion-body {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .map-data-divider {
+    width: 100%;
+    height: 1px;
+    margin: var(--space-3) 0 0;
+    border: 0;
+    background: var(--color-border);
   }
 
   .selector-accordion {
@@ -2217,6 +2657,21 @@
     font-size: 0.92em;
   }
 
+  .time-filter-stack {
+    padding: var(--space-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel);
+  }
+
+  .time-filter-range-grid {
+    gap: var(--space-3);
+  }
+
+  .warning-text {
+    color: var(--color-warning);
+  }
+
   .track-group {
     display: grid;
     gap: var(--space-2);
@@ -2285,7 +2740,8 @@
     transition: transform var(--transition), color var(--transition);
   }
 
-  .settings-accordion[open] .settings-accordion-icon::before {
+  .selector-accordion[open] > summary .settings-accordion-icon::before,
+  .settings-accordion[open] > summary .settings-accordion-icon::before {
     transform: rotate(90deg);
     color: var(--color-text);
   }
@@ -2370,7 +2826,8 @@
     }
 
     .popup-field-grid,
-    .scale-grid {
+    .scale-grid,
+    .time-filter-range-grid {
       grid-template-columns: 1fr;
     }
 

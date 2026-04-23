@@ -11,6 +11,12 @@ import { buildAggregateCell, computeAggregateStats, pointInCircle, pointInPolygo
 const worldWidthDegrees = 360;
 const canonicalMinLongitude = -180;
 const canonicalMaxLongitude = 180;
+const rowTimestampSql = 'COALESCE(r.occurred_at, r.received_at)';
+const historicalQueryCacheTtlSeconds = 5 * 60;
+const rawPointQueryCacheVersion = 'v1';
+const aggregateQueryCacheVersion = 'v2';
+const aggregateCellCacheVersion = 'v3';
+const aggregateCellInvalidationDefaultSizes = [20, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 15000, 20000];
 
 const normalizeMetricKey = ({ value, fallback = 'doseRate' }) => normalizePropKey({ value }) ?? fallback;
 
@@ -121,6 +127,11 @@ const coerceBoolean = ({ value }) => {
   return Boolean(value);
 };
 
+const coercePositiveInteger = ({ value }) => {
+  const parsed = coerceNumber({ value });
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
 const toStringArray = ({ value }) => {
   if (Array.isArray(value)) {
     return value.map(String).flatMap((entry) => entry.split(',')).map((entry) => entry.trim()).filter(Boolean);
@@ -133,6 +144,126 @@ const toStringArray = ({ value }) => {
   return [];
 };
 
+const normalizeTimeFilterMode = ({ input }) => {
+  const rawMode = typeof input?.timeFilterMode === 'string'
+    ? input.timeFilterMode.trim().toLowerCase()
+    : '';
+  if (['none', 'absolute', 'relative'].includes(rawMode)) {
+    return rawMode;
+  }
+
+  return input?.dateFrom || input?.dateTo ? 'absolute' : 'none';
+};
+
+const normalizeRelativeTimeUnit = ({ input }) => {
+  const rawValue = typeof input?.relativeUnit === 'string'
+    ? input.relativeUnit.trim().toLowerCase()
+    : '';
+
+  return ['hours', 'days'].includes(rawValue) ? rawValue : null;
+};
+
+const asIsoTimestampOrThrow = ({
+  value,
+  field,
+  correlationId
+}) => {
+  if (!value) {
+    return null;
+  }
+
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    throw createAppError({
+      caller: 'query::asIsoTimestampOrThrow',
+      reason: `Invalid ${field} timestamp.`,
+      errorKey: 'REQUEST_INVALID',
+      correlationId,
+      status: 400
+    });
+  }
+
+  return parsed.toISOString();
+};
+
+const resolveEffectiveTimeWindow = ({
+  filter,
+  correlationId = null,
+  now = new Date()
+}) => {
+  if (filter.timeFilterMode === 'relative') {
+    const relativeAmount = coercePositiveInteger({ value: filter.relativeAmount });
+    if (!relativeAmount || !filter.relativeUnit) {
+      throw createAppError({
+        caller: 'query::resolveEffectiveTimeWindow',
+        reason: 'Relative time filters require a positive whole amount and a supported unit.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    const unitMillis = filter.relativeUnit === 'days'
+      ? 24 * 60 * 60 * 1000
+      : 60 * 60 * 1000;
+
+    return {
+      dateFrom: new Date(now.getTime() - (relativeAmount * unitMillis)).toISOString(),
+      dateTo: null,
+      historicalCacheEligible: false
+    };
+  }
+
+  const dateFrom = asIsoTimestampOrThrow({
+    value: filter.dateFrom,
+    field: 'dateFrom',
+    correlationId
+  });
+  const dateTo = asIsoTimestampOrThrow({
+    value: filter.dateTo,
+    field: 'dateTo',
+    correlationId
+  });
+
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    throw createAppError({
+      caller: 'query::resolveEffectiveTimeWindow',
+      reason: 'Time filter start must be before the end.',
+      errorKey: 'REQUEST_INVALID',
+      correlationId,
+      status: 400
+    });
+  }
+
+  return {
+    dateFrom,
+    dateTo,
+    historicalCacheEligible: Boolean(filter.historicalCacheEligible && dateTo)
+  };
+};
+
+const toResultFilter = ({ filter }) => ({
+  datasetIds: filter.datasetIds,
+  combinedDatasetIds: filter.combinedDatasetIds,
+  datalogIds: filter.datalogIds,
+  datalogSelectionMode: filter.datalogSelectionMode,
+  dateFrom: filter.dateFrom,
+  dateTo: filter.dateTo,
+  metric: filter.metric,
+  metricMin: filter.metricMin,
+  metricMax: filter.metricMax,
+  minLat: filter.minLat,
+  maxLat: filter.maxLat,
+  minLon: filter.minLon,
+  maxLon: filter.maxLon,
+  includeHidden: filter.includeHidden,
+  applyExcludeAreas: filter.applyExcludeAreas,
+  shape: filter.shape,
+  cellSizeMeters: filter.cellSizeMeters,
+  zoom: filter.zoom,
+  modeBucketDecimals: filter.modeBucketDecimals
+});
+
 const normalizeFilterInput = ({ input }) => ({
   datasetIds: toStringArray({ value: input?.datasetIds }).sort(),
   combinedDatasetIds: toStringArray({ value: input?.combinedDatasetIds }).sort(),
@@ -140,8 +271,13 @@ const normalizeFilterInput = ({ input }) => ({
   datalogSelectionMode: ['all', 'include', 'none'].includes(String(input?.datalogSelectionMode))
     ? String(input.datalogSelectionMode)
     : 'all',
+  timeFilterMode: normalizeTimeFilterMode({ input }),
   dateFrom: input?.dateFrom ? String(input.dateFrom) : null,
   dateTo: input?.dateTo ? String(input.dateTo) : null,
+  relativeAmount: coercePositiveInteger({ value: input?.relativeAmount }),
+  relativeUnit: normalizeRelativeTimeUnit({ input }),
+  historicalCacheEligible: coerceBoolean({ value: input?.historicalCacheEligible }),
+  forceRecheck: coerceBoolean({ value: input?.forceRecheck }),
   metric: normalizeMetricKey({ value: input?.metric }),
   metricMin: coerceNumber({ value: input?.metricMin }),
   metricMax: coerceNumber({ value: input?.metricMax }),
@@ -161,7 +297,7 @@ const normalizeFilterInput = ({ input }) => ({
 const roundCacheCoordinate = ({ value }) => Number(Number(value).toFixed(4));
 
 const withoutViewportFilter = ({ filter }) => ({
-  ...filter,
+  ...toResultFilter({ filter }),
   minLat: null,
   maxLat: null,
   minLon: null,
@@ -306,8 +442,15 @@ const clipAggregateCellsToViewport = ({
   });
 };
 
-const aggregateCellCacheVersion = 'v2';
-const aggregateCellInvalidationDefaultSizes = [20, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 15000, 20000];
+const buildRawPointCacheKey = ({
+  userId,
+  queryHash,
+  cacheKeyDatasets
+}) => (
+  `raw-points:${rawPointQueryCacheVersion}:user=${userId}`
+  + `:query=${queryHash}`
+  + `:datasets=${cacheKeyDatasets}`
+);
 
 const buildAggregateCellCacheScopeHash = ({
   datasetIds,
@@ -338,6 +481,16 @@ const buildAggregateCellCacheKey = ({
   + `:shape=${shape}`
   + `:size=${cellSizeMeters}`
   + `:cell=${cellId}`
+  + `:datasets=${cacheKeyDatasets}`
+);
+
+const buildAggregateQueryCacheKey = ({
+  userId,
+  queryHash,
+  cacheKeyDatasets
+}) => (
+  `aggregate-cells:${aggregateQueryCacheVersion}:user=${userId}`
+  + `:query=${queryHash}`
   + `:datasets=${cacheKeyDatasets}`
 );
 
@@ -459,6 +612,13 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     return {
       cacheKeyDatasets,
       scopeHash,
+      invalidatePattern: (
+        `aggregate-cell:${aggregateCellCacheVersion}:user=${user.id}`
+        + `:scope=${scopeHash}`
+        + `:shape=${filter.shape}`
+        + `:size=${cellSizeMeters}`
+        + `:*:datasets=${cacheKeyDatasets}`
+      ),
       buildKey: ({ cellId }) => buildAggregateCellCacheKey({
         userId: user.id,
         scopeHash,
@@ -469,6 +629,57 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       })
     };
   };
+
+  const buildCacheMeta = ({
+    key = null,
+    hit,
+    source = 'computed',
+    ttlSecondsRemaining = null
+  }) => ({
+    hit,
+    key,
+    source,
+    ttlSecondsRemaining
+  });
+
+  const buildRawPointResponse = ({
+    datasetIds,
+    filter,
+    rows,
+    limit
+  }) => ({
+    datasetIds,
+    metric: filter.metric,
+    totalCount: rows.length,
+    capped: rows.length > limit,
+    points: rows.slice(0, limit).map((row) => ({
+      id: row.id,
+      datasetId: row.dataset_id,
+      datalogId: row.datalog_id,
+      sourceType: row.source_type,
+      datalogName: row.datalog_name,
+      rawTimestamp: row.raw_timestamp,
+      parsedTimeText: row.parsed_time_text,
+      occurredAt: row.occurred_at,
+      receivedAt: row.received_at,
+      latitude: row.latitude,
+      longitude: row.longitude,
+      accuracy: row.accuracy,
+      altitudeMeters: row.altitude_meters,
+      deviceId: row.device_id,
+      deviceName: row.device_name,
+      deviceType: row.device_type,
+      deviceCalibration: row.device_calibration,
+      firmwareVersion: row.firmware_version,
+      sourceReadingId: row.source_reading_id,
+      comment: row.comment,
+      custom: row.custom_text,
+      rowNumber: row.row_number,
+      warningFlags: row.warning_flags_json,
+      measurements: row.measurements_json ?? {},
+      extra: row.extra_json
+    }))
+  });
 
   const resolveAggregateCellWithCacheInfo = async ({
     baseCell,
@@ -671,32 +882,48 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
     return nextRows;
   };
 
-  const fetchFilteredRows = async ({
+  const prepareResolvedFilter = async ({
     user,
     input,
-    correlationId = null,
+    correlationId = null
+  }) => {
+    const normalizedFilter = normalizeFilterInput({ input });
+    const resolvedTimeWindow = resolveEffectiveTimeWindow({
+      filter: normalizedFilter,
+      correlationId
+    });
+    const filter = {
+      ...normalizedFilter,
+      dateFrom: resolvedTimeWindow.dateFrom,
+      dateTo: resolvedTimeWindow.dateTo
+    };
+    const datasetIds = await resolveDatasetIds({ user, filter, correlationId });
+
+    return {
+      datasetIds,
+      filter,
+      historicalCacheEligible: resolvedTimeWindow.historicalCacheEligible,
+      shortCircuit: (
+        !datasetIds.length
+        || filter.datalogSelectionMode === 'none'
+        || (filter.datalogSelectionMode === 'include' && !filter.datalogIds.length)
+      )
+    };
+  };
+
+  const fetchRowsForPreparedFilter = async ({
+    datasetIds,
+    filter,
     includeViewport = true
   }) => {
-    const filter = normalizeFilterInput({ input });
-    const datasetIds = await resolveDatasetIds({ user, filter, correlationId });
-    if (!datasetIds.length) {
-      return {
-        datasetIds,
-        filter,
-        rows: [],
-        excludeAreas: []
-      };
-    }
-
     if (
-      filter.datalogSelectionMode === 'none'
+      !datasetIds.length
+      || filter.datalogSelectionMode === 'none'
       || (filter.datalogSelectionMode === 'include' && !filter.datalogIds.length)
     ) {
       return {
-        datasetIds,
-        filter,
-        rows: [],
-        excludeAreas: []
+        excludeAreas: [],
+        rows: []
       };
     }
 
@@ -716,12 +943,12 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
 
     if (filter.dateFrom) {
       params.push(filter.dateFrom);
-      where.push(`(r.occurred_at IS NULL OR r.occurred_at >= $${params.length}::timestamptz)`);
+      where.push(`${rowTimestampSql} >= $${params.length}::timestamptz`);
     }
 
     if (filter.dateTo) {
       params.push(filter.dateTo);
-      where.push(`(r.occurred_at IS NULL OR r.occurred_at <= $${params.length}::timestamptz)`);
+      where.push(`${rowTimestampSql} <= $${params.length}::timestamptz`);
     }
 
     if (includeViewport) {
@@ -751,18 +978,18 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
 
     const coreMetricColumn = getCoreMetricColumn({ propKey: filter.metric });
     const metricExpression = filter.metric === 'occurredAt'
-      ? `EXTRACT(EPOCH FROM COALESCE(r.occurred_at, r.received_at)) * 1000.0`
+      ? `EXTRACT(EPOCH FROM ${rowTimestampSql}) * 1000.0`
       : coreMetricColumn
         ? `r.${coreMetricColumn}`
-      : (() => {
-          params.push(filter.metric);
-          joins.push(
-            `LEFT JOIN reading_numeric_values metric_value
-             ON metric_value.reading_id = r.id
-            AND metric_value.prop_key = $${params.length}`
-          );
-          return 'metric_value.numeric_value';
-        })();
+        : (() => {
+            params.push(filter.metric);
+            joins.push(
+              `LEFT JOIN reading_numeric_values metric_value
+               ON metric_value.reading_id = r.id
+              AND metric_value.prop_key = $${params.length}`
+            );
+            return 'metric_value.numeric_value';
+          })();
 
     if (filter.metricMin !== null) {
       params.push(filter.metricMin);
@@ -815,7 +1042,7 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
          WHERE v.reading_id = r.id
        ) measurement_map ON TRUE
        WHERE ${where.join(' AND ')}
-       ORDER BY r.occurred_at NULLS LAST, r.row_number ASC`,
+       ORDER BY ${rowTimestampSql} NULLS LAST, r.row_number ASC`,
       params
     );
 
@@ -824,50 +1051,129 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
       : [];
 
     return {
-      datasetIds,
-      filter,
       excludeAreas,
       rows: applyExcludeAreasToRows({ rows: result.rows, excludeAreas })
     };
   };
 
-  const getRawPoints = async ({ user, input, correlationId = null }) => {
-    const uiConfig = await settingsService.getUiConfig();
-    const { datasetIds, filter, rows } = await fetchFilteredRows({ user, input, correlationId });
-    const limit = filter.limit ?? uiConfig.rawPointCap;
+  const fetchFilteredRows = async ({
+    user,
+    input,
+    correlationId = null,
+    includeViewport = true
+  }) => {
+    const prepared = await prepareResolvedFilter({
+      user,
+      input,
+      correlationId
+    });
+    if (prepared.shortCircuit) {
+      return {
+        datasetIds: prepared.datasetIds,
+        filter: prepared.filter,
+        historicalCacheEligible: prepared.historicalCacheEligible,
+        rows: [],
+        excludeAreas: []
+      };
+    }
+
+    const result = await fetchRowsForPreparedFilter({
+      datasetIds: prepared.datasetIds,
+      filter: prepared.filter,
+      includeViewport
+    });
 
     return {
-      datasetIds,
-      metric: filter.metric,
-      totalCount: rows.length,
-      capped: rows.length > limit,
-      points: rows.slice(0, limit).map((row) => ({
-        id: row.id,
-        datasetId: row.dataset_id,
-        datalogId: row.datalog_id,
-        sourceType: row.source_type,
-        datalogName: row.datalog_name,
-        rawTimestamp: row.raw_timestamp,
-        parsedTimeText: row.parsed_time_text,
-        occurredAt: row.occurred_at,
-        receivedAt: row.received_at,
-        latitude: row.latitude,
-        longitude: row.longitude,
-        accuracy: row.accuracy,
-        altitudeMeters: row.altitude_meters,
-        deviceId: row.device_id,
-        deviceName: row.device_name,
-        deviceType: row.device_type,
-        deviceCalibration: row.device_calibration,
-        firmwareVersion: row.firmware_version,
-        sourceReadingId: row.source_reading_id,
-        comment: row.comment,
-        custom: row.custom_text,
-        rowNumber: row.row_number,
-        warningFlags: row.warning_flags_json,
-        measurements: row.measurements_json ?? {},
-        extra: row.extra_json
-      }))
+      datasetIds: prepared.datasetIds,
+      filter: prepared.filter,
+      historicalCacheEligible: prepared.historicalCacheEligible,
+      ...result
+    };
+  };
+
+  const getRawPoints = async ({ user, input, correlationId = null }) => {
+    const uiConfig = await settingsService.getUiConfig();
+    const prepared = await prepareResolvedFilter({
+      user,
+      input,
+      correlationId
+    });
+    const limit = prepared.filter.limit ?? uiConfig.rawPointCap;
+    const cacheEnabled = prepared.historicalCacheEligible;
+    const cacheKeyDatasets = prepared.datasetIds.slice().sort().join(',') || 'none';
+    const cacheKey = cacheEnabled
+      ? buildRawPointCacheKey({
+          userId: user.id,
+          queryHash: sha256Hex({
+            value: JSON.stringify({
+              datasetIds: prepared.datasetIds,
+              filter: {
+                ...toResultFilter({ filter: prepared.filter }),
+                limit
+              }
+            })
+          }),
+          cacheKeyDatasets
+        })
+      : null;
+
+    if (cacheEnabled && prepared.filter.forceRecheck) {
+      await cache.deleteKey({ key: cacheKey });
+    }
+
+    if (cacheEnabled) {
+      const cached = await cache.readJson({
+        key: cacheKey,
+        ttlSeconds: historicalQueryCacheTtlSeconds,
+        includeMeta: true
+      });
+      if (cached) {
+        return {
+          ...cached.value,
+          cache: buildCacheMeta({
+            key: cacheKey,
+            hit: true,
+            source: 'cache',
+            ttlSecondsRemaining: cached.ttlSecondsRemaining
+          })
+        };
+      }
+    }
+
+    const rowResult = prepared.shortCircuit
+      ? { rows: [] }
+      : await fetchRowsForPreparedFilter({
+          datasetIds: prepared.datasetIds,
+          filter: prepared.filter
+        });
+    const response = buildRawPointResponse({
+      datasetIds: prepared.datasetIds,
+      filter: prepared.filter,
+      rows: rowResult.rows,
+      limit
+    });
+
+    if (!cacheEnabled) {
+      return {
+        ...response,
+        cache: buildCacheMeta({ hit: false })
+      };
+    }
+
+    await cache.writeJson({
+      key: cacheKey,
+      value: response,
+      ttlSeconds: historicalQueryCacheTtlSeconds
+    });
+    const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
+    return {
+      ...response,
+      cache: buildCacheMeta({
+        key: cacheKey,
+        hit: false,
+        source: 'computed',
+        ttlSecondsRemaining
+      })
     };
   };
 
@@ -887,84 +1193,118 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
           ...cacheViewport
         }
       : input;
-    const { datasetIds, filter, rows } = await fetchFilteredRows({
+    const prepared = await prepareResolvedFilter({
       user,
       input: aggregateInput,
-      correlationId,
-      includeViewport: Boolean(cacheViewport)
+      correlationId
     });
     const cacheableFilter = cacheViewport
-      ? filter
-      : withoutViewportFilter({ filter });
-    const cellSizeMeters = filter.cellSizeMeters ?? uiConfig.defaultCellSizeMeters;
-    const modeBucketDecimals = filter.modeBucketDecimals ?? uiConfig.modeBucketDecimals;
-    const ttlSeconds = uiConfig.cacheTtlSeconds;
-    const cacheKeyDatasets = datasetIds.slice().sort().join(',') || 'none';
-    const cellCacheContext = buildAggregateCellCacheContext({
-      user,
-      datasetIds,
-      filter,
-      cellSizeMeters,
-      modeBucketDecimals
-    });
-    const cacheQueryHash = sha256Hex({
-      value: JSON.stringify({
-        datasetIds,
-        filter: {
-          ...cacheableFilter,
+      ? prepared.filter
+      : withoutViewportFilter({ filter: prepared.filter });
+    const cellSizeMeters = prepared.filter.cellSizeMeters ?? uiConfig.defaultCellSizeMeters;
+    const modeBucketDecimals = prepared.filter.modeBucketDecimals ?? uiConfig.modeBucketDecimals;
+    const cacheEnabled = prepared.historicalCacheEligible;
+    const cacheKeyDatasets = prepared.datasetIds.slice().sort().join(',') || 'none';
+    const cellCacheContext = cacheEnabled
+      ? buildAggregateCellCacheContext({
+          user,
+          datasetIds: prepared.datasetIds,
+          filter: cacheableFilter,
           cellSizeMeters,
           modeBucketDecimals
-        }
-      })
-    });
-    const cacheKey = `aggregate-cells:user=${user.id}:query=${cacheQueryHash}:datasets=${cacheKeyDatasets}`;
+        })
+      : null;
+    const cacheKey = cacheEnabled
+      ? buildAggregateQueryCacheKey({
+          userId: user.id,
+          queryHash: sha256Hex({
+            value: JSON.stringify({
+              datasetIds: prepared.datasetIds,
+              filter: {
+                ...cacheableFilter,
+                cellSizeMeters,
+                modeBucketDecimals
+              }
+            })
+          }),
+          cacheKeyDatasets
+        })
+      : null;
 
-    const cached = await cache.readJson({
-      key: cacheKey,
-      ttlSeconds,
-      includeMeta: true
-    });
-    if (cached) {
-      const visibleCells = clipAggregateCellsToViewport({
-        cells: cached.value.cells,
-        viewport: viewportFilter
-      });
-
-      return {
-        ...cached.value,
-        cells: await Promise.all(visibleCells.map((cell) => resolveAggregateCellWithCacheInfo({
-          baseCell: cell,
-          cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
-          ttlSeconds,
-          sourceOnWrite: 'cache'
-        }))),
-        cache: {
-          hit: true,
-          key: cacheKey,
-          source: 'cache',
-          ttlSecondsRemaining: cached.ttlSecondsRemaining
-        }
-      };
+    if (cacheEnabled && prepared.filter.forceRecheck) {
+      await cache.deleteKey({ key: cacheKey });
+      await cache.deletePattern({ pattern: cellCacheContext.invalidatePattern });
     }
+
+    if (cacheEnabled) {
+      const cached = await cache.readJson({
+        key: cacheKey,
+        ttlSeconds: historicalQueryCacheTtlSeconds,
+        includeMeta: true
+      });
+      if (cached) {
+        const visibleCells = clipAggregateCellsToViewport({
+          cells: cached.value.cells,
+          viewport: viewportFilter
+        });
+
+        return {
+          ...cached.value,
+          cells: await Promise.all(visibleCells.map((cell) => resolveAggregateCellWithCacheInfo({
+            baseCell: cell,
+            cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
+            ttlSeconds: historicalQueryCacheTtlSeconds,
+            sourceOnWrite: 'cache'
+          }))),
+          cache: buildCacheMeta({
+            key: cacheKey,
+            hit: true,
+            source: 'cache',
+            ttlSecondsRemaining: cached.ttlSecondsRemaining
+          })
+        };
+      }
+    }
+
+    const rowResult = prepared.shortCircuit
+      ? { rows: [] }
+      : await fetchRowsForPreparedFilter({
+          datasetIds: prepared.datasetIds,
+          filter: prepared.filter,
+          includeViewport: Boolean(cacheViewport)
+        });
+    const rows = rowResult.rows;
 
     if (!rows.length) {
       const empty = {
-        datasetIds,
+        datasetIds: prepared.datasetIds,
         metric: cacheableFilter.metric,
         shape: cacheableFilter.shape,
         cellSizeMeters,
         cells: []
       };
-      await cache.writeJson({ key: cacheKey, value: empty, ttlSeconds });
+
+      if (!cacheEnabled) {
+        return {
+          ...empty,
+          cache: buildCacheMeta({ hit: false })
+        };
+      }
+
+      await cache.writeJson({
+        key: cacheKey,
+        value: empty,
+        ttlSeconds: historicalQueryCacheTtlSeconds
+      });
       const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
       return {
         ...empty,
-        cache: {
-          hit: false,
+        cache: buildCacheMeta({
           key: cacheKey,
+          hit: false,
           source: 'computed',
           ttlSecondsRemaining
-        }
+        })
       };
     }
 
@@ -998,29 +1338,50 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         const baseCell = buildAggregateCellPayload({
           cell,
           rows: cellRows,
-          selectedMetric: filter.metric,
+          selectedMetric: prepared.filter.metric,
           popupStringFieldKeys,
           modeBucketDecimals
         });
 
+        if (!cacheEnabled) {
+          return baseCell;
+        }
+
         return resolveAggregateCellWithCacheInfo({
           baseCell,
           cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
-          ttlSeconds,
+          ttlSeconds: historicalQueryCacheTtlSeconds,
           sourceOnWrite: 'computed'
         });
       })
     );
 
     const fullResponse = {
-      datasetIds,
+      datasetIds: prepared.datasetIds,
       metric: cacheableFilter.metric,
       shape: cacheableFilter.shape,
       cellSizeMeters,
-      cells: resolvedCells.map((cell) => stripAggregateCellCacheInfo({ cell }))
+      cells: cacheEnabled
+        ? resolvedCells.map((cell) => stripAggregateCellCacheInfo({ cell }))
+        : resolvedCells
     };
 
-    await cache.writeJson({ key: cacheKey, value: fullResponse, ttlSeconds });
+    if (!cacheEnabled) {
+      return {
+        ...fullResponse,
+        cells: clipAggregateCellsToViewport({
+          cells: resolvedCells,
+          viewport: viewportFilter
+        }),
+        cache: buildCacheMeta({ hit: false })
+      };
+    }
+
+    await cache.writeJson({
+      key: cacheKey,
+      value: fullResponse,
+      ttlSeconds: historicalQueryCacheTtlSeconds
+    });
     const ttlSecondsRemaining = await cache.getTtlSeconds({ key: cacheKey });
     return {
       ...fullResponse,
@@ -1028,17 +1389,18 @@ export const createQueryService = ({ db, cache, settingsService, datasetService 
         cells: resolvedCells,
         viewport: viewportFilter
       }),
-      cache: {
-        hit: false,
+      cache: buildCacheMeta({
         key: cacheKey,
+        hit: false,
         source: 'computed',
         ttlSecondsRemaining
-      }
+      })
     };
   };
 
   const invalidateDatasets = async ({ datasetIds }) => {
     for (const datasetId of datasetIds) {
+      await cache.deletePattern({ pattern: `raw-points:*${datasetId}*` });
       await cache.deletePattern({ pattern: `aggregate:*${datasetId}*` });
       await cache.deletePattern({ pattern: `aggregate-cells:*${datasetId}*` });
       await cache.deletePattern({ pattern: `aggregate-cell:${aggregateCellCacheVersion}:*${datasetId}*` });

@@ -188,16 +188,19 @@
   let activePopup: ActivePopup | null = null;
   let preservePopupState = false;
   const overlayPane = 'data-overlay';
+  const popupHeightAllowancePx = 20;
 
   const updatePopupLayoutVars = () => {
     if (!container) {
       return;
     }
 
-    container.style.setProperty(
-      '--map-popup-max-height',
-      `${Math.max(240, Math.floor(container.clientHeight / 2))}px`
+    const popupMaxHeight = Math.max(
+      240 + popupHeightAllowancePx,
+      Math.floor(container.clientHeight / 2) + popupHeightAllowancePx
     );
+
+    container.style.setProperty('--map-popup-max-height', `${popupMaxHeight}px`);
   };
 
   const escapeHtml = (value: string) => value

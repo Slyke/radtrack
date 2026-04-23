@@ -54,6 +54,13 @@ export const createCache = async ({ runtimeConfig, logger, correlationId }) => {
     client,
     readJson,
     writeJson,
+    deleteKey: async ({ key }) => {
+      if (!key) {
+        return;
+      }
+
+      await client.del(key);
+    },
     getTtlSeconds: async ({ key }) => {
       const ttlSeconds = await client.ttl(key);
       return ttlSeconds >= 0 ? ttlSeconds : null;
