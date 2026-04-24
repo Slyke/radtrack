@@ -18,6 +18,12 @@
     values: Record<string, CellValue>;
   };
 
+  export type AggregatePointsModalExportContext = {
+    build: string | null;
+    fileNameBase: string;
+    filters: Record<string, unknown>;
+  };
+
   interface Props {
     columns?: AggregatePointsModalColumn[];
     rows?: AggregatePointsModalRow[];
@@ -26,6 +32,7 @@
     pointCount?: number;
     subtitle?: string | null;
     maxHeightPx?: number | null;
+    exportContext?: AggregatePointsModalExportContext | null;
   }
 
   let {
@@ -35,7 +42,8 @@
     errorMessage = null,
     pointCount = 0,
     subtitle = null,
-    maxHeightPx = null
+    maxHeightPx = null,
+    exportContext = null
   }: Props = $props();
 
   const dispatch = createEventDispatcher<{
@@ -53,6 +61,8 @@
     maximumFractionDigits: 5
   });
   const countFormatter = () => new Intl.NumberFormat($localeStore.language);
+  const indexColumnPropKey = '__rowIndex';
+  const indexColumnLabel = '#';
 
   const defaultSortDirection = ({ column }: { column: AggregatePointsModalColumn | null }) => (
     column?.valueType === 'time' ? 'desc' : 'asc'
@@ -247,6 +257,140 @@
 
     return sortDirection === 'asc' ? '↑' : '↓';
   };
+
+  const sanitizeFileNameSegment = (value: string) => {
+    const normalized = value
+      .trim()
+      .replace(/[^a-zA-Z0-9._-]+/g, '-')
+      .replace(/-{2,}/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    return normalized || 'radtrack-map-cell-data';
+  };
+
+  const buildDownloadFileName = ({ extension }: { extension: 'csv' | 'json' }) => {
+    const exportDate = new Date().toISOString().slice(0, 10);
+    const base = sanitizeFileNameSegment(exportContext?.fileNameBase ?? 'radtrack-map-cell-data');
+    return `${base}-${exportDate}.${extension}`;
+  };
+
+  const downloadBlob = ({
+    content,
+    fileName,
+    type
+  }: {
+    content: string;
+    fileName: string;
+    type: string;
+  }) => {
+    const url = URL.createObjectURL(new Blob([content], { type }));
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = fileName;
+    document.body.append(anchor);
+    anchor.click();
+
+    window.setTimeout(() => {
+      URL.revokeObjectURL(url);
+      anchor.remove();
+    }, 0);
+  };
+
+  const buildDisplayedTableRows = () => sortedRows.map((row, rowIndex) => Object.fromEntries([
+    [indexColumnPropKey, countFormatter().format(rowIndex + 1)],
+    ...columns.map((column) => [
+      column.propKey,
+      formatCellValue({
+        column,
+        value: row.values[column.propKey] ?? null
+      })
+    ])
+  ]));
+
+  const buildExportColumns = () => [
+    {
+      propKey: indexColumnPropKey,
+      label: indexColumnLabel,
+      valueType: 'number' as const
+    },
+    ...columns.map((column) => ({
+      propKey: column.propKey,
+      label: column.label,
+      valueType: column.valueType
+    }))
+  ];
+
+  const escapeCsvValue = (value: string) => `"${value.replaceAll('"', '""')}"`;
+
+  const buildCsvContent = () => {
+    const exportColumns = buildExportColumns();
+    const lines = [
+      exportColumns.map((column) => escapeCsvValue(column.label)).join(','),
+      ...buildDisplayedTableRows().map((row) => exportColumns
+        .map((column) => escapeCsvValue(String(row[column.propKey] ?? '')))
+        .join(','))
+    ];
+
+    return `\uFEFF${lines.join('\r\n')}`;
+  };
+
+  const buildJsonEnvelope = () => {
+    const data = buildDisplayedTableRows();
+
+    return {
+      exportTime: new Date().toISOString(),
+      build: exportContext?.build ?? null,
+      filters: {
+        indexes: [0, data.length],
+        limit: 'all',
+        totalEntries: pointCount,
+        returnedEntries: data.length,
+        ...(exportContext?.filters ?? {})
+      },
+      title: 'RadTrack',
+      type: 'map aggregate cell data',
+      columns: buildExportColumns(),
+      sort: {
+        propKey: sortKey,
+        direction: sortDirection
+      },
+      integrity: {
+        verified: false,
+        algorithm: null,
+        hashInput: null,
+        totalEntriesVerified: data.length,
+        latestHash: null,
+        reason: 'Derived from the current map aggregate cell table view.'
+      },
+      data
+    };
+  };
+
+  const canDownload = $derived.by(() => Boolean(exportContext && columns.length && sortedRows.length));
+
+  const downloadCsv = () => {
+    if (!canDownload) {
+      return;
+    }
+
+    downloadBlob({
+      content: buildCsvContent(),
+      fileName: buildDownloadFileName({ extension: 'csv' }),
+      type: 'text/csv;charset=utf-8'
+    });
+  };
+
+  const downloadJson = () => {
+    if (!canDownload) {
+      return;
+    }
+
+    downloadBlob({
+      content: JSON.stringify(buildJsonEnvelope(), null, 2),
+      fileName: buildDownloadFileName({ extension: 'json' }),
+      type: 'application/json;charset=utf-8'
+    });
+  };
 </script>
 
 <svelte:window onkeydown={handleWindowKeydown} />
@@ -286,7 +430,15 @@
         {/if}
       </div>
 
-      <button onclick={closeModal} type="button">{t('radtrack-common_close-button')}</button>
+      <div class="map-cell-points-modal-actions">
+        <button disabled={!canDownload} onclick={downloadCsv} type="button">
+          {t('radtrack-map_points_modal_download_csv-button')}
+        </button>
+        <button disabled={!canDownload} onclick={downloadJson} type="button">
+          {t('radtrack-map_points_modal_download_json-button')}
+        </button>
+        <button onclick={closeModal} type="button">{t('radtrack-common_close-button')}</button>
+      </div>
     </header>
 
     {#if errorMessage}
@@ -300,6 +452,9 @@
         <table class="map-cell-points-table">
           <thead>
             <tr>
+              <th class="map-cell-points-index-heading">
+                <span>{indexColumnLabel}</span>
+              </th>
               {#each columns as column}
                 <th>
                   <button
@@ -319,8 +474,13 @@
           </thead>
 
           <tbody>
-            {#each sortedRows as row}
+            {#each sortedRows as row, rowIndex}
               <tr>
+                <td class="map-cell-points-index-cell">
+                  <div class="map-cell-points-index-value" title={countFormatter().format(rowIndex + 1)}>
+                    {countFormatter().format(rowIndex + 1)}
+                  </div>
+                </td>
                 {#each columns as column}
                   {@const formattedValue = formatCellValue({
                     column,
@@ -394,6 +554,14 @@
     gap: var(--space-2);
   }
 
+  .map-cell-points-modal-actions {
+    display: flex;
+    align-items: flex-start;
+    justify-content: flex-end;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
   .map-cell-points-modal-title-row {
     display: flex;
     align-items: center;
@@ -426,6 +594,23 @@
     top: 0;
     z-index: 1;
     background: var(--color-panel);
+  }
+
+  .map-cell-points-index-heading,
+  .map-cell-points-index-cell {
+    color: var(--color-text-muted);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+  }
+
+  .map-cell-points-index-heading {
+    width: 1%;
+  }
+
+  .map-cell-points-index-value {
+    min-width: 2.25rem;
+    color: inherit;
   }
 
   .map-cell-points-sort-button {
@@ -477,6 +662,10 @@
 
     .map-cell-points-modal-header {
       display: grid;
+    }
+
+    .map-cell-points-modal-actions {
+      justify-content: flex-start;
     }
   }
 </style>

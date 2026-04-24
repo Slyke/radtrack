@@ -117,6 +117,12 @@
     values: Record<string, AggregateCellModalValue>;
   };
 
+  type AggregateCellModalExportContext = {
+    build: string | null;
+    fileNameBase: string;
+    filters: Record<string, unknown>;
+  };
+
   type DatasetOption = {
     id: string;
     name: string;
@@ -1789,7 +1795,8 @@
   const getPopupFieldDefaults = ({ tracks }: { tracks: TrackOption[] }) => {
     const selectableFields = collectVisibleFields({
       tracks,
-      fieldSelector: (track) => mergePopupFields(track.supportedFields ?? [])
+      fieldSelector: (track) => mergePopupFields(track.supportedFields ?? []),
+      respectVisibility: false
     });
     const states = new Map(selectableFields.map((field) => [field.propKey, {
       hasEnabled: false,
@@ -1886,11 +1893,13 @@
   }));
   const pendingAvailablePopupFields = $derived.by<MetricField[]>(() => collectVisibleFields({
     tracks: pendingTrackOptions,
-    fieldSelector: (track) => mergePopupFields(track.supportedFields ?? [])
+    fieldSelector: (track) => mergePopupFields(track.supportedFields ?? []),
+    respectVisibility: false
   }));
   const appliedAvailablePopupFields = $derived.by<MetricField[]>(() => collectVisibleFields({
     tracks: appliedTrackOptions,
-    fieldSelector: (track) => mergePopupFields(track.supportedFields ?? [])
+    fieldSelector: (track) => mergePopupFields(track.supportedFields ?? []),
+    respectVisibility: false
   }));
   const popupSelectableFields = $derived.by<MetricField[]>(() => pendingAvailablePopupFields);
   const pendingPopupFieldDefaults = $derived.by<Record<string, boolean>>(() => getPopupFieldDefaults({
@@ -2064,6 +2073,70 @@
       })
     ]))
   })));
+  const aggregateCellModalExportContext = $derived.by<AggregateCellModalExportContext | null>(() => {
+    if (!aggregateCellModalState || !activeQuery || activeQuery.key !== aggregateCellModalState.queryKey) {
+      return null;
+    }
+
+    const cell = aggregateCellModalDisplayCell;
+    const absoluteTimeWindow = resolveAbsoluteTimeWindow({
+      sourceFilters: activeQuery.filters
+    });
+    const timeFilter = activeQuery.filters.timeFilterMode === 'absolute'
+      ? {
+          mode: 'absolute',
+          precision: activeQuery.filters.timeFilterPrecision,
+          dateFrom: absoluteTimeWindow?.dateFrom ?? null,
+          dateTo: absoluteTimeWindow?.dateTo ?? null
+        }
+      : activeQuery.filters.timeFilterMode === 'relative'
+        ? {
+            mode: 'relative',
+            amount: Math.max(1, Math.trunc(toFiniteNumber(activeQuery.filters.timeFilterRelativeAmount) ?? 0)),
+            unit: activeQuery.filters.timeFilterRelativeUnit
+          }
+        : {
+            mode: 'none'
+          };
+
+    return {
+      build: $sessionStore.build?.label ?? null,
+      fileNameBase: `radtrack-map-cell-${aggregateCellModalState.cellId}`,
+      filters: {
+        mode: activeQuery.filters.mode,
+        metric: activeQuery.filters.metric,
+        metricLabel: getAppliedMetricLabel(activeQuery.filters.metric),
+        aggregateStat: activeQuery.filters.aggregateStat,
+        aggregateStatLabel: getAggregateStatLabel(activeQuery.filters.aggregateStat),
+        shape: aggregateCellModalState.shape,
+        cellSizeMeters: aggregateCellModalState.cellSizeMeters,
+        cellId: aggregateCellModalState.cellId,
+        cellCenter: cell
+          ? {
+              latitude: cell.center.latitude,
+              longitude: cell.center.longitude
+            }
+          : null,
+        cellRadiusMeters: cell?.radiusMeters ?? null,
+        cellTimeRange: cell?.timeRange ?? null,
+        datasetIds: [...activeQuery.filters.datasetIds],
+        combinedDatasetIds: [...activeQuery.filters.combinedDatasetIds],
+        datalogIds: [...activeQuery.filters.trackIds],
+        datalogSelectionMode: activeQuery.filters.trackSelectionMode,
+        applyExcludeAreas: activeQuery.filters.applyExcludeAreas,
+        timeFilter,
+        viewport: {
+          centerLat: activeQuery.viewport.centerLat,
+          centerLon: activeQuery.viewport.centerLon,
+          minLat: activeQuery.viewport.minLat,
+          maxLat: activeQuery.viewport.maxLat,
+          minLon: activeQuery.viewport.minLon,
+          maxLon: activeQuery.viewport.maxLon,
+          zoom: activeQuery.viewport.zoom
+        }
+      }
+    };
+  });
   const trackSelectionSummary = $derived.by(() => {
     if (!filters.datasetIds.length || filters.trackSelectionMode === 'none') {
       return t('radtrack-common_none');
@@ -3538,6 +3611,7 @@
           <MapAggregatePointsModal
             columns={aggregateCellModalColumns}
             errorMessage={aggregateCellModalErrorMessage}
+            exportContext={aggregateCellModalExportContext}
             loading={aggregateCellModalLoading}
             maxHeightPx={popupMaxHeightPx}
             on:close={closeAggregateCellModal}

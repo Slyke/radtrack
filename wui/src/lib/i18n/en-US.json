@@ -302,6 +302,8 @@
   "radtrack-map_points_modal_count-label": "{$count} data points",
   "radtrack-map_points_modal_loading-label": "Loading data points…",
   "radtrack-map_points_modal_empty": "No data points found for this cell.",
+  "radtrack-map_points_modal_download_csv-button": "Download CSV",
+  "radtrack-map_points_modal_download_json-button": "Download JSON",
   "radtrack-map_points_modal_sort_ascending-label": "Sort {$field} ascending",
   "radtrack-map_points_modal_sort_descending-label": "Sort {$field} descending",
   "radtrack-map_scale_low-label": "Low",
