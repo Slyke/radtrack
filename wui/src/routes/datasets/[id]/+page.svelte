@@ -218,7 +218,8 @@
             propKey: field.propKey,
             displayName: field.displayName,
             valueType: field.valueType,
-            popupDefaultEnabled: field.popupDefaultEnabled
+            popupDefaultEnabled: field.popupDefaultEnabled,
+            metricListEnabled: field.metricListEnabled
           }))
         },
         csrf: $sessionStore.csrf

@@ -8,9 +8,12 @@
   import { ApiError, apiFetch, resolveApiPath } from '$lib/api/client';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
   import {
+    coreMetricFields,
+    getAggregateTimePropKey,
     humanizePropKey,
     normalizePropKey,
     normalizeSupportedFields,
+    syntheticPopupFields,
     type MetricField
   } from '$lib/datalog-fields';
   import { sessionStore } from '$lib/stores/session';
@@ -20,6 +23,7 @@
     displayName: string;
     valueType: 'number' | 'time' | 'string';
     popupDefaultEnabled: boolean;
+    metricListEnabled: boolean;
   };
 
   let datalog = $state<any>(null);
@@ -32,6 +36,7 @@
   let savingReading = $state(false);
   let restoringOriginal = $state(false);
   let deletingDatalog = $state(false);
+  let showPropInfo = $state(false);
   let metadataForm = $state({
     name: ''
   });
@@ -80,7 +85,63 @@
     }).format(value);
   };
 
+  const formatMetricValueTypeLabel = (valueType: MetricField['valueType']) => (
+    valueType === 'time'
+      ? t('radtrack-common_time-label')
+      : (valueType === 'string' ? t('radtrack-common_text-label') : t('radtrack-common_number-label'))
+  );
+
   const supportedFields = $derived.by<MetricField[]>(() => normalizeSupportedFields(datalog?.supportedFields ?? []));
+  const autodetectSupportedFields = $derived.by<MetricField[]>(() => normalizeSupportedFields(datalog?.autodetectSupportedFields ?? []));
+  const autodetectMissingSupportedFields = $derived.by<MetricField[]>(() => {
+    const existingPropKeys = new Set(normalizeSupportedFields(
+      supportedFieldDrafts.map((field) => ({
+        propKey: field.propKey,
+        displayName: field.displayName,
+        valueType: field.valueType,
+        popupDefaultEnabled: field.popupDefaultEnabled,
+        metricListEnabled: field.metricListEnabled
+      }))
+    ).map((field) => field.propKey));
+
+    return autodetectSupportedFields.filter((field) => !existingPropKeys.has(field.propKey));
+  });
+  const specialSupportedFieldGroups: Array<{
+    id: string;
+    titleKey: string;
+    fields: MetricField[];
+  }> = [
+    {
+      id: 'top-level',
+      titleKey: 'radtrack-track_special_props_top_level-title',
+      fields: [
+        ...coreMetricFields,
+        {
+          propKey: 'deviceId',
+          displayName: 'Device ID',
+          source: 'measurement',
+          valueType: 'string',
+          popupDefaultEnabled: false,
+          metricListEnabled: false
+        }
+      ]
+    },
+    {
+      id: 'synthetic',
+      titleKey: 'radtrack-track_special_props_synthetic-title',
+      fields: [
+        {
+          propKey: getAggregateTimePropKey('occurredAt') ?? 'occurredAt_aggregated',
+          displayName: 'Time (Aggregate)',
+          source: 'synthetic',
+          valueType: 'time',
+          popupDefaultEnabled: false,
+          metricListEnabled: false
+        },
+        ...syntheticPopupFields
+      ]
+    }
+  ];
 
   const measurementFields = $derived.by<MetricField[]>(() => {
     const normalized = supportedFields;
@@ -97,7 +158,8 @@
           displayName: humanizePropKey(propKey) || propKey,
           source: 'measurement',
           valueType: 'number',
-          popupDefaultEnabled: true
+          popupDefaultEnabled: true,
+          metricListEnabled: true
         });
       }
     }
@@ -123,20 +185,17 @@
         })()
       )
   );
+  const originalFileDownloadUrl = $derived(
+    datalog?.originalFileDownloadPath
+      ? resolveApiPath({ path: datalog.originalFileDownloadPath })
+      : ''
+  );
 
-  const exampleMeasurements = $derived.by(() => {
-    const fields = numericMeasurementFields;
-    if (!fields.length) {
-      return {
-        doseRate: 0.11,
-        countRate: 84
-      };
-    }
-
-    return Object.fromEntries(
-      fields.slice(0, 4).map((field, index) => [field.propKey, Number(((index + 1) * 1.25).toFixed(2))])
-    );
-  });
+  const exampleMeasurements = $derived.by(() => ({
+    temperature: 20,
+    humidity: 40,
+    doseRate: 2.5
+  }));
 
   const payloadExample = $derived.by(() => JSON.stringify({
     occurredAt: '2026-04-17T19:15:00.000Z',
@@ -146,12 +205,14 @@
     accuracy: 4.2,
     measurements: exampleMeasurements,
     deviceId: 'device-001',
-    deviceName: 'Pocket Sensor',
-    deviceType: 'Generic Sensor',
-    deviceCalibration: 'factory-2026-01',
-    firmwareVersion: '1.2.3',
-    sourceReadingId: 'reading-000123',
-    comment: 'Delayed upload after reconnect',
+    components: {
+      deviceName: 'Pocket Sensor',
+      deviceType: 'Generic Sensor',
+      deviceCalibration: 'factory-2026-01',
+      firmwareVersion: '1.2.3',
+      sourceReadingId: 'reading-000123',
+      comment: 'Delayed upload after reconnect'
+    },
     extra: {
       gpsFix: '3d',
       satelliteCount: 14
@@ -199,7 +260,8 @@
       propKey: field.propKey ?? '',
       displayName: field.displayName ?? '',
       valueType: field.valueType === 'time' ? 'time' : (field.valueType === 'string' ? 'string' : 'number'),
-      popupDefaultEnabled: field.popupDefaultEnabled !== false
+      popupDefaultEnabled: field.popupDefaultEnabled !== false,
+      metricListEnabled: field.metricListEnabled !== false
     }));
   };
 
@@ -276,13 +338,15 @@
       propKey: field.propKey,
       displayName: field.displayName,
       valueType: field.valueType,
-      popupDefaultEnabled: field.popupDefaultEnabled
+      popupDefaultEnabled: field.popupDefaultEnabled,
+      metricListEnabled: field.metricListEnabled
     }))
   ).map((field) => ({
     propKey: field.propKey,
     displayName: field.displayName,
     valueType: field.valueType,
-    popupDefaultEnabled: field.popupDefaultEnabled
+    popupDefaultEnabled: field.popupDefaultEnabled,
+    metricListEnabled: field.metricListEnabled
   }));
 
   const saveMetadata = async () => {
@@ -332,8 +396,28 @@
         propKey: '',
         displayName: '',
         valueType: 'number',
-        popupDefaultEnabled: true
+        popupDefaultEnabled: true,
+        metricListEnabled: true
       }
+    ];
+  };
+
+  const autodetectSupportedFieldDrafts = () => {
+    const additions = autodetectMissingSupportedFields
+      .map((field) => ({
+        propKey: field.propKey,
+        displayName: field.displayName,
+        valueType: field.valueType,
+        popupDefaultEnabled: false,
+        metricListEnabled: field.metricListEnabled !== false
+      }));
+    if (!additions.length) {
+      return;
+    }
+
+    supportedFieldDrafts = [
+      ...supportedFieldDrafts,
+      ...additions
     ];
   };
 
@@ -352,7 +436,8 @@
       propKey,
       displayName: current.displayName,
       valueType: current.valueType,
-      popupDefaultEnabled: current.popupDefaultEnabled
+      popupDefaultEnabled: current.popupDefaultEnabled,
+      metricListEnabled: current.metricListEnabled
     }])[0];
     const displayName = current.displayName.trim()
       || normalizedField?.displayName
@@ -363,7 +448,8 @@
             propKey,
             displayName,
             valueType: field.valueType === 'time' ? 'time' : (field.valueType === 'string' ? 'string' : 'number'),
-            popupDefaultEnabled: field.popupDefaultEnabled !== false
+            popupDefaultEnabled: field.popupDefaultEnabled !== false,
+            metricListEnabled: field.metricListEnabled !== false
           }
         : field
     ));
@@ -608,14 +694,59 @@
             <input bind:this={datalogNameInput} bind:value={metadataForm.name} />
           </label>
 
-          <div class="form-grid field-block">
-            <div class="field-block-header">
-              <div>
-                <div class="muted">{t('radtrack-common_metric-label')}</div>
-                <p class="faint">Fields defined on this datalog. Number and time fields can be plotted on the map. Text fields are popup-only.</p>
+            <div class="form-grid field-block">
+              <div class="field-block-header">
+                <div>
+                  <div class="muted">{t('radtrack-common_metric-label')}</div>
+                </div>
               </div>
-              <button type="button" onclick={addSupportedFieldDraft}>{t('radtrack-common_create-button')}</button>
-            </div>
+
+              <div class="supported-field-toolbar-row">
+                <div class="actions supported-field-toolbar-primary">
+                  <button type="button" disabled={!autodetectMissingSupportedFields.length} onclick={autodetectSupportedFieldDrafts}>{t('radtrack-common_autodetect-button')}</button>
+                  <button type="button" onclick={addSupportedFieldDraft}>{t('radtrack-common_create-button')}</button>
+                </div>
+                <div class="actions supported-field-toolbar-secondary">
+                  <button
+                    aria-expanded={showPropInfo}
+                    class:mid={showPropInfo}
+                    type="button"
+                    onclick={() => {
+                      showPropInfo = !showPropInfo;
+                    }}
+                  >
+                    {t('radtrack-track_prop_info-button')}
+                  </button>
+                </div>
+              </div>
+
+            {#if showPropInfo}
+              <div class="field-block special-props-panel">
+                <div class="muted">{t('radtrack-track_prop_info-title')}</div>
+                <p class="faint">{t('radtrack-track_metric_help')}</p>
+                <p class="faint">{t('radtrack-track_metric_autodetect_help')}</p>
+                <div class="muted">{t('radtrack-track_special_props-heading')}</div>
+                <p class="faint">{t('radtrack-track_special_props_help')}</p>
+                <div class="special-props-grid">
+                  {#each specialSupportedFieldGroups as group}
+                    <section class="special-props-group">
+                      <div class="muted">{t(group.titleKey)}</div>
+                      <div class="special-prop-list">
+                        {#each group.fields as field}
+                          <div class="special-prop-row">
+                            <div class="special-prop-main">
+                              <code>{field.propKey}</code>
+                              <span class="faint">{field.displayName}</span>
+                            </div>
+                            <span class="chip subtle">{formatMetricValueTypeLabel(field.valueType)}</span>
+                          </div>
+                        {/each}
+                      </div>
+                    </section>
+                  {/each}
+                </div>
+              </div>
+            {/if}
 
             {#if supportedFieldDrafts.length}
               <div class="supported-field-list">
@@ -641,10 +772,18 @@
                         <option value="string">Text</option>
                       </select>
                     </label>
-                    <label class="checkbox-field supported-field-toggle">
-                      <input bind:checked={field.popupDefaultEnabled} type="checkbox" />
-                      <span>{t('radtrack-track_popup_default-label')}</span>
-                    </label>
+                    <div class="supported-field-toggle-group">
+                      <label class="checkbox-field supported-field-toggle">
+                        <input bind:checked={field.popupDefaultEnabled} type="checkbox" />
+                        <span>{t('radtrack-track_popup_default-label')}</span>
+                      </label>
+                      {#if field.valueType !== 'string'}
+                        <label class="checkbox-field supported-field-toggle">
+                          <input bind:checked={field.metricListEnabled} type="checkbox" />
+                          <span>{t('radtrack-track_metric_list_enabled-label')}</span>
+                        </label>
+                      {/if}
+                    </div>
                     <div class="supported-field-actions">
                       <button class="danger" type="button" onclick={() => removeSupportedFieldDraft(index)}>{t('radtrack-common_remove-button')}</button>
                     </div>
@@ -652,7 +791,7 @@
                 {/each}
               </div>
             {:else}
-              <p class="muted">No fields defined yet. Live ingest can infer numeric fields from payloads.</p>
+              <p class="muted">{t('radtrack-track_metric_empty')}</p>
             {/if}
           </div>
 
@@ -727,16 +866,27 @@
             </div>
           {/if}
 
-          <div class="form-grid field-block">
-            <div class="muted">{t('radtrack-track_curl-title')}</div>
-            <pre>{curlExample}</pre>
-          </div>
+          <details class="details-accordion field-block">
+            <summary>
+              <span>{t('radtrack-track_example_request-title')}</span>
+              <span class="exclude-editor-summary">
+                <span aria-hidden="true" class="exclude-editor-icon"></span>
+              </span>
+            </summary>
 
-          <div class="form-grid field-block">
-            <div class="muted">{t('radtrack-track_payload-title')}</div>
-            <pre>{payloadExample}</pre>
-            <p class="faint">{t('radtrack-track_sample_payload_description')}</p>
-          </div>
+            <div class="example-request-sections">
+              <div class="example-request-section">
+                <div class="muted">{t('radtrack-track_curl-title')}</div>
+                <pre>{curlExample}</pre>
+              </div>
+
+              <div class="example-request-section">
+                <div class="muted">{t('radtrack-track_payload-title')}</div>
+                <pre>{payloadExample}</pre>
+                <p class="faint">{t('radtrack-track_sample_payload_description')}</p>
+              </div>
+            </div>
+          </details>
 
           <div class="table-wrap">
             <table>
@@ -779,68 +929,80 @@
           </div>
         </div>
       {:else}
-        <p class="muted">{t('radtrack-track_not_live')}</p>
+        <div class="imported-datalog-note">
+          <p class="muted">{t('radtrack-track_not_live')}</p>
+          {#if datalog.originalFileDownloadPath}
+            <a class="button-link mid" href={originalFileDownloadUrl}>{t('radtrack-track_download_original-button')}</a>
+          {/if}
+        </div>
       {/if}
     </article>
   </section>
 
-  {#if datalog.accessLevel === 'edit'}
-    <section class="panel datalog-panel">
-      <h2>{t('radtrack-common_sharing-label')}</h2>
-      <p class="muted">{t('radtrack-track_sharing_help')}</p>
+  <section class="panel datalog-panel">
+    <details class="sharing-accordion">
+      <summary>
+        <span>{t('radtrack-common_sharing-label')}</span>
+        <span class="exclude-editor-summary">
+          <span class="chip subtle">{datalog.shares?.length ?? 0}</span>
+          <span aria-hidden="true" class="exclude-editor-icon"></span>
+        </span>
+      </summary>
 
-      <div class="grid cols-3">
-        <label>
-          <div class="muted">{t('radtrack-common_user-label')}</div>
-          <select bind:value={shareForm.targetUserId}>
-            <option value="">{t('radtrack-common_select_user-option')}</option>
-            {#each shareTargets as target}
-              <option value={target.id}>{target.username}</option>
-            {/each}
-          </select>
-        </label>
+      <div class="form-grid">
+        <p class="muted">{t('radtrack-track_sharing_help')}</p>
 
-        <label>
-          <div class="muted">{t('radtrack-common_access-label')}</div>
-          <select bind:value={shareForm.accessLevel}>
-            <option value="view">{t('radtrack-common_view-label')}</option>
-            <option value="edit">{t('radtrack-common_edit-label')}</option>
-          </select>
-        </label>
+        {#if datalog.accessLevel === 'edit'}
+          <div class="form-grid sharing-controls">
+            <select bind:value={shareForm.targetUserId}>
+              <option value="">{t('radtrack-common_select_user-option')}</option>
+              {#each shareTargets as target}
+                <option value={target.id}>{target.username}</option>
+              {/each}
+            </select>
+            <select bind:value={shareForm.accessLevel}>
+              <option value="view">{t('radtrack-common_view-label')}</option>
+              <option value="edit">{t('radtrack-common_edit-label')}</option>
+            </select>
+            <div class="actions">
+              <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
+            </div>
+          </div>
+        {/if}
 
-        <div class="supported-field-actions">
-          <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>{t('radtrack-common_user-label')}</th>
+                <th>{t('radtrack-common_access-label')}</th>
+                {#if datalog.accessLevel === 'edit'}
+                  <th></th>
+                {/if}
+              </tr>
+            </thead>
+            <tbody>
+              {#if datalog.shares?.length}
+                {#each datalog.shares as share}
+                  <tr>
+                    <td>{share.username}</td>
+                    <td>{share.accessLevel}</td>
+                    {#if datalog.accessLevel === 'edit'}
+                      <td><button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button></td>
+                    {/if}
+                  </tr>
+                {/each}
+              {:else}
+                <tr>
+                  <td colspan={datalog.accessLevel === 'edit' ? 3 : 2} class="muted">{t('radtrack-track_sharing_empty')}</td>
+                </tr>
+              {/if}
+            </tbody>
+          </table>
         </div>
       </div>
-
-      <div class="table-wrap">
-        <table>
-          <thead>
-            <tr>
-              <th>{t('radtrack-common_user-label')}</th>
-              <th>{t('radtrack-common_access-label')}</th>
-              <th>{t('radtrack-common_actions-label')}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {#if datalog.shares?.length}
-              {#each datalog.shares as share}
-                <tr>
-                  <td>{share.username}</td>
-                  <td>{share.accessLevel}</td>
-                  <td><button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button></td>
-                </tr>
-              {/each}
-            {:else}
-              <tr>
-                <td colspan="3" class="muted">{t('radtrack-track_sharing_empty')}</td>
-              </tr>
-            {/if}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  {/if}
+    </details>
+  </section>
 
   <section class="panel datalog-panel">
     <div class="page-header compact-header">
@@ -996,6 +1158,22 @@
     flex-wrap: wrap;
   }
 
+  .supported-field-toolbar-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .supported-field-toolbar-primary {
+    margin-right: auto;
+  }
+
+  .supported-field-toolbar-secondary {
+    margin-left: auto;
+  }
+
   .supported-field-list {
     display: grid;
     gap: var(--space-3);
@@ -1018,15 +1196,138 @@
     display: inline-flex;
     align-items: center;
     gap: var(--space-2);
-    min-height: 100%;
     white-space: nowrap;
-    align-self: center;
+    justify-self: start;
+  }
+
+  .supported-field-toggle-group {
+    display: grid;
+    gap: var(--space-2);
+    justify-items: start;
+    justify-self: start;
+    align-self: end;
+    padding-bottom: 0.2rem;
   }
 
   .endpoint-value {
     display: inline-block;
     max-width: 100%;
     overflow-wrap: anywhere;
+  }
+
+  .imported-datalog-note {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    flex-wrap: wrap;
+  }
+
+  .details-accordion,
+  .sharing-accordion {
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .details-accordion summary,
+  .sharing-accordion summary {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    cursor: pointer;
+    padding: 0.8rem 0.9rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel-strong);
+  }
+
+  .details-accordion summary::-webkit-details-marker,
+  .sharing-accordion summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .details-accordion[open] summary,
+  .sharing-accordion[open] summary {
+    margin-bottom: var(--space-3);
+  }
+
+  .sharing-controls {
+    grid-template-columns: minmax(0, 1.5fr) minmax(10rem, 0.8fr) auto;
+    align-items: end;
+  }
+
+  .exclude-editor-summary {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .exclude-editor-icon::before {
+    content: '>';
+    display: inline-block;
+    color: var(--color-text-muted);
+    transition: transform var(--transition), color var(--transition);
+  }
+
+  .details-accordion[open] .exclude-editor-icon::before,
+  .sharing-accordion[open] .exclude-editor-icon::before {
+    transform: rotate(90deg);
+    color: var(--color-text);
+  }
+
+  .special-props-panel {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .special-props-grid {
+    display: grid;
+    gap: var(--space-3);
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .special-props-group {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel-strong);
+  }
+
+  .special-prop-list {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .special-prop-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .special-prop-main {
+    display: grid;
+    gap: var(--space-1);
+    min-width: 0;
+  }
+
+  .example-request-sections {
+    display: grid;
+    gap: var(--space-3);
+  }
+
+  .example-request-section {
+    display: grid;
+    gap: var(--space-2);
+  }
+
+  .example-request-section + .example-request-section {
+    padding-top: var(--space-3);
+    border-top: 1px solid var(--color-border);
   }
 
   .span-3 {
@@ -1054,7 +1355,21 @@
       grid-column: auto;
     }
 
-    .supported-field-row {
+    .supported-field-row,
+    .sharing-controls {
+      grid-template-columns: minmax(0, 1fr);
+    }
+
+    .supported-field-toolbar-row {
+      align-items: stretch;
+    }
+
+    .supported-field-toolbar-primary,
+    .supported-field-toolbar-secondary {
+      margin: 0;
+    }
+
+    .special-props-grid {
       grid-template-columns: minmax(0, 1fr);
     }
   }

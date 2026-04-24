@@ -88,6 +88,7 @@
     sourceReadingId?: string | null;
     custom?: string | null;
     comment: string | null;
+    components?: Record<string, string>;
     extra?: Record<string, unknown>;
   };
 
@@ -1528,11 +1529,7 @@
   const selectionChipClass = ({ count }: { count: number }) => count ? 'chip start' : 'chip subtle';
 
   const sortDatasets = ({ values }: { values: DatasetOption[] }) => orderMapDatasets({
-    datasets: [...values].sort((left, right) => (
-      (right.readingCount - left.readingCount)
-      || (right.trackCount - left.trackCount)
-      || left.name.localeCompare(right.name)
-    )),
+    datasets: values,
     order: mapDatasetOrder
   });
 
@@ -1586,16 +1583,18 @@
 
   const collectVisibleFields = ({
     tracks,
-    fieldSelector
+    fieldSelector,
+    respectVisibility = true
   }: {
     tracks: TrackOption[];
     fieldSelector: (track: TrackOption) => MetricField[];
+    respectVisibility?: boolean;
   }) => {
     const merged = new Map<string, MetricField>();
 
     for (const track of tracks) {
       for (const field of fieldSelector(track)) {
-        if (!isMapFieldVisible({ visibility: mapFieldVisibility, propKey: field.propKey })) {
+        if (respectVisibility && !isMapFieldVisible({ visibility: mapFieldVisibility, propKey: field.propKey })) {
           continue;
         }
 
@@ -1701,11 +1700,13 @@
   }));
   const pendingAvailableMetricFields = $derived.by<MetricField[]>(() => collectVisibleFields({
     tracks: pendingTrackOptions,
-    fieldSelector: (track) => track.metricFields ?? []
+    fieldSelector: (track) => track.metricFields ?? [],
+    respectVisibility: false
   }));
   const appliedAvailableMetricFields = $derived.by<MetricField[]>(() => collectVisibleFields({
     tracks: appliedTrackOptions,
-    fieldSelector: (track) => track.metricFields ?? []
+    fieldSelector: (track) => track.metricFields ?? [],
+    respectVisibility: false
   }));
   const pendingAvailablePopupFields = $derived.by<MetricField[]>(() => collectVisibleFields({
     tracks: pendingTrackOptions,
@@ -1765,6 +1766,22 @@
     aggregateStat: activeAggregateStat,
     settings: colorScaleSettings
   }));
+  const activeLegendScaleValues = $derived.by(() => ({
+    low: activeColorScale ? formatNumber(activeColorScale.low) : null,
+    mid: activeColorScale ? formatNumber(activeColorScale.mid) : null,
+    high: activeColorScale ? formatNumber(activeColorScale.high) : null
+  }));
+  const legendNeedsWide = $derived.by(() => {
+    const labels = [
+      `${t('radtrack-common_low-label')} ${activeLegendScaleValues.low ?? ''}`.trim(),
+      `${t('radtrack-common_mid-label')} ${activeLegendScaleValues.mid ?? ''}`.trim(),
+      `${t('radtrack-common_high-label')} ${activeLegendScaleValues.high ?? ''}`.trim()
+    ];
+
+    return labels.some((label) => label.length > 18)
+      || labels.join('').length > 48
+      || activeLegendSummary.length > 20;
+  });
   const selectedTrackGroups = $derived.by(() => getTrackGroupsForFilters({ sourceFilters: filters }));
   const pendingPopupMetricStates = $derived.by<Record<string, boolean>>(() => getPopupMetricStates({
     metrics: popupFields.metrics,
@@ -3162,7 +3179,7 @@
         </div>
 
         {#if activeMode === 'aggregate'}
-          <div class="map-overlay map-overlay-legend">
+          <div class:is-wide={legendNeedsWide} class="map-overlay map-overlay-legend">
             <details class="panel map-overlay-card" open>
               <summary>
                 <span>{t('radtrack-map_legend-title')}</span>
@@ -3174,23 +3191,23 @@
               <div class="legend-scale-row">
                 <span class="chip start">
                   {t('radtrack-common_low-label')}
-                  {#if activeColorScale}
+                  {#if activeLegendScaleValues.low}
                     {' '}
-                    {formatNumber(activeColorScale.low)}
+                    {activeLegendScaleValues.low}
                   {/if}
                 </span>
                 <span class="chip warning">
                   {t('radtrack-common_mid-label')}
-                  {#if activeColorScale}
+                  {#if activeLegendScaleValues.mid}
                     {' '}
-                    {formatNumber(activeColorScale.mid)}
+                    {activeLegendScaleValues.mid}
                   {/if}
                 </span>
                 <span class="chip danger">
                   {t('radtrack-common_high-label')}
-                  {#if activeColorScale}
+                  {#if activeLegendScaleValues.high}
                     {' '}
-                    {formatNumber(activeColorScale.high)}
+                    {activeLegendScaleValues.high}
                   {/if}
                 </span>
               </div>
@@ -3610,6 +3627,14 @@
 
   .map-overlay-basemap-card {
     width: min(16rem, calc(100vw - (var(--space-4) * 2)));
+  }
+
+  .map-overlay-legend.is-wide {
+    max-width: min(52rem, calc(100% - (var(--space-4) * 2)));
+  }
+
+  .map-overlay-legend.is-wide .map-overlay-card {
+    width: min(52rem, calc(100vw - (var(--space-4) * 2)));
   }
 
   .legend-bar {

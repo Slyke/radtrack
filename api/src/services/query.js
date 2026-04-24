@@ -6,6 +6,11 @@ import {
   normalizePropKey,
   normalizeSupportedFields
 } from '../utils/datalog-fields.js';
+import {
+  buildStoredComponents,
+  resolveStoredComponentValue,
+  stripStoredComponentsFromExtra
+} from '../utils/datalog-components.js';
 import { sha256Hex } from '../utils/ids.js';
 import { buildAggregateCell, computeAggregateStats, pointInCircle, pointInPolygon } from '../utils/geo.js';
 
@@ -14,9 +19,9 @@ const canonicalMinLongitude = -180;
 const canonicalMaxLongitude = 180;
 const rowTimestampSql = 'COALESCE(r.occurred_at, r.received_at)';
 const defaultHistoricalQueryCacheTtlSeconds = 5 * 60;
-const rawPointQueryCacheVersion = 'v1';
-const aggregateQueryCacheVersion = 'v2';
-const aggregateCellCacheVersion = 'v3';
+const rawPointQueryCacheVersion = 'v2';
+const aggregateQueryCacheVersion = 'v3';
+const aggregateCellCacheVersion = 'v4';
 const aggregateCellInvalidationDefaultSizes = [20, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 15000, 20000];
 
 const normalizeMetricKey = ({ value, fallback = 'doseRate' }) => normalizePropKey({ value }) ?? fallback;
@@ -81,27 +86,17 @@ const getRowPopupDataValue = ({ row, propKey }) => {
   switch (propKey) {
     case 'deviceId':
       return coercePopupValueString({ value: row.device_id });
-    case 'deviceName':
-      return coercePopupValueString({ value: row.device_name });
-    case 'deviceType':
-      return coercePopupValueString({ value: row.device_type });
-    case 'deviceCalibration':
-      return coercePopupValueString({ value: row.device_calibration });
-    case 'firmwareVersion':
-      return coercePopupValueString({ value: row.firmware_version });
-    case 'sourceReadingId':
-      return coercePopupValueString({ value: row.source_reading_id });
-    case 'comment':
-      return coercePopupValueString({ value: row.comment });
-    case 'custom':
-      return coercePopupValueString({ value: row.custom_text });
     case 'rawTimestamp':
       return coercePopupValueString({ value: row.raw_timestamp });
     case 'parsedTimeText':
       return coercePopupValueString({ value: row.parsed_time_text });
     default:
-      return resolveExtraFieldValue({
+      return resolveStoredComponentValue({
+        source: row,
         extraJson: row.extra_json,
+        propKey
+      }) ?? resolveExtraFieldValue({
+        extraJson: stripStoredComponentsFromExtra({ extraJson: row.extra_json }),
         propKey
       });
   }
@@ -749,7 +744,11 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
       rowNumber: row.row_number,
       warningFlags: row.warning_flags_json,
       measurements: row.measurements_json ?? {},
-      extra: row.extra_json
+      components: buildStoredComponents({
+        source: row,
+        extraJson: row.extra_json
+      }),
+      extra: stripStoredComponentsFromExtra({ extraJson: row.extra_json })
     }))
   });
 

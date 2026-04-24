@@ -19,7 +19,7 @@ Default deployment runs them separately. Monolith mode lets the API serve the bu
   - `string` fields are popup-only and are deduped in aggregate popups
   - core reading props such as `occurredAt`, `latitude`, `longitude`, `altitudeMeters`, and `accuracy` are only exposed on the map when they are explicitly listed in the datalog field definitions
   - numeric field values are stored in `reading_numeric_values`
-  - string field values are resolved from reading metadata columns and `extra_json`
+  - string field values are resolved from reading metadata columns, stored `components`, and `extra_json`
 - Reserved synthetic popup-only fields can be added manually in the datalog field editor:
   - `radtrackDataCount`
   - `radtrackCacheKey`

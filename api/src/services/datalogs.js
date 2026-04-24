@@ -1,14 +1,23 @@
 import { randomBytes } from 'node:crypto';
 import { createAppError } from '../lib/errors.js';
 import {
+  coerceMeasurementNumericValue,
   coerceMeasurementValueMap,
   getDefaultSupportedFields,
+  getAggregateTimePropKey,
   getCoreMetricColumn,
   inferSupportedFieldsFromMeasurementSets,
   mergeMetricFields,
   normalizePropKey,
   normalizeSupportedFields
 } from '../utils/datalog-fields.js';
+import {
+  buildStoredComponents,
+  componentsExtraJsonKey,
+  getKnownComponentField,
+  knownComponentFields,
+  stripStoredComponentsFromExtra
+} from '../utils/datalog-components.js';
 import { createOpaqueId, sha256Hex } from '../utils/ids.js';
 import { parseTrackBuffer } from '../utils/track.js';
 import { canShare } from './permissions.js';
@@ -36,6 +45,7 @@ const implicitMeasurementReservedKeys = new Set([
   'extra',
   'measurements',
   'measurementValues',
+  'components',
   'deviceId',
   'deviceName',
   'deviceType',
@@ -43,6 +53,8 @@ const implicitMeasurementReservedKeys = new Set([
   'firmwareVersion',
   'sourceReadingId'
 ]);
+
+const knownComponentFieldMap = new Map(knownComponentFields.map((field) => [field.propKey, field]));
 
 const asPlainObject = (value) => (
   value && typeof value === 'object' && !Array.isArray(value)
@@ -202,8 +214,8 @@ const normalizeMeasurementPatch = ({ value, correlationId = null }) => {
       continue;
     }
 
-    const parsed = Number(rawValue);
-    if (!Number.isFinite(parsed)) {
+    const parsed = coerceMeasurementNumericValue({ value: rawValue });
+    if (parsed === null) {
       throw createAppError({
         caller: 'datalogs::normalizeMeasurementPatch',
         reason: `${propKey} must be a finite number.`,
@@ -232,8 +244,8 @@ const collectImplicitMeasurementValues = ({ input }) => {
       continue;
     }
 
-    const parsed = Number(rawValue);
-    if (!Number.isFinite(parsed)) {
+    const parsed = coerceMeasurementNumericValue({ value: rawValue });
+    if (parsed === null) {
       continue;
     }
 
@@ -241,6 +253,79 @@ const collectImplicitMeasurementValues = ({ input }) => {
   }
 
   return values;
+};
+
+const buildIngestComponents = ({ input, correlationId = null }) => {
+  const components = {};
+
+  for (const field of knownComponentFields) {
+    const value = asTrimmedString({
+      value: input?.[field.propKey],
+      field: field.propKey,
+      required: false,
+      maxLength: field.maxLength,
+      correlationId
+    });
+    if (value !== null) {
+      components[field.propKey] = value;
+    }
+  }
+
+  const explicitComponents = asPlainObject(input?.components) ?? {};
+  for (const [rawKey, rawValue] of Object.entries(explicitComponents)) {
+    const propKey = normalizePropKey({ value: rawKey });
+    if (!propKey || propKey === 'deviceId' || (rawValue && typeof rawValue === 'object')) {
+      continue;
+    }
+
+    const knownField = getKnownComponentField({ propKey });
+    const value = asTrimmedString({
+      value: rawValue,
+      field: `components.${propKey}`,
+      required: false,
+      maxLength: knownField?.maxLength ?? 4000,
+      correlationId
+    });
+    if (value === null) {
+      continue;
+    }
+
+    components[propKey] = value;
+  }
+
+  return components;
+};
+
+const splitStoredComponents = ({ components }) => {
+  const storedColumns = {};
+  const nestedComponents = {};
+
+  for (const [propKey, value] of Object.entries(components ?? {})) {
+    if (knownComponentFieldMap.has(propKey)) {
+      storedColumns[propKey] = value;
+      continue;
+    }
+
+    nestedComponents[propKey] = value;
+  }
+
+  return {
+    storedColumns,
+    nestedComponents
+  };
+};
+
+const buildStoredExtraJson = ({ extra, components }) => {
+  const normalizedExtra = asPlainObject(extra) ?? {};
+  const { nestedComponents } = splitStoredComponents({ components });
+  if (!Object.keys(nestedComponents).length) {
+    return normalizedExtra;
+  }
+
+  return {
+    ...normalizedExtra,
+    [componentsExtraJsonKey]: nestedComponents
+  };
 };
 
 const collectImplicitExtraValues = ({ input }) => {
@@ -333,7 +418,11 @@ const mapReadingRow = ({ row, measurements }) => ({
   modifiedAt: row.modified_at,
   modifiedByUserId: row.modified_by_user_id,
   measurements,
-  extra: row.extra_json
+  components: buildStoredComponents({
+    source: row,
+    extraJson: row.extra_json
+  }),
+  extra: stripStoredComponentsFromExtra({ extraJson: row.extra_json })
 });
 
 const batchInsertReadings = async ({ client, datalogId, rows, actorCreatedAt }) => {
@@ -620,6 +709,44 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
     return access;
   };
 
+  const loadArchivedOriginalRawFile = async ({
+    datalog,
+    correlationId = null,
+    caller = 'datalogs::loadArchivedOriginalRawFile'
+  }) => {
+    if (datalog.source_type !== 'import' || !datalog.raw_file_id) {
+      throw createAppError({
+        caller,
+        reason: 'Only imported datalogs with archived source files are supported.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    const rawFileResult = await db.query(
+      `SELECT original_filename, blob_data
+       FROM raw_files
+       WHERE id = $1`,
+      [datalog.raw_file_id]
+    );
+    const rawFile = rawFileResult.rows[0] ?? null;
+    if (!rawFile) {
+      throw createAppError({
+        caller,
+        reason: 'The archived source file for this datalog could not be found.',
+        errorKey: 'DATASET_NOT_FOUND',
+        correlationId,
+        status: 404
+      });
+    }
+
+    return {
+      fileName: rawFile.original_filename,
+      buffer: rawFile.blob_data
+    };
+  };
+
   const listDatalogKeys = async ({ datalogId }) => {
     const result = await db.query(
       `SELECT *
@@ -809,36 +936,155 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
             propKey: field.propKey,
             displayName: field.displayName,
             reason: 'Supported field has no usable values in this datalog yet.'
-          }]
+        }]
     ));
+  };
+
+  const listAutodetectSupportedFields = async ({ datalogId, supportedFields }) => {
+    const existingPropKeys = new Set(
+      normalizeSupportedFields({ value: supportedFields }).map((field) => field.propKey)
+    );
+    const autodetectedFields = [];
+
+    const appendField = (field) => {
+      const normalizedField = normalizeSupportedFields({
+        value: [{
+          ...field,
+          popupDefaultEnabled: false
+        }]
+      })[0];
+      if (!normalizedField || existingPropKeys.has(normalizedField.propKey)) {
+        return;
+      }
+
+      autodetectedFields.push({
+        propKey: normalizedField.propKey,
+        displayName: normalizedField.displayName,
+        valueType: normalizedField.valueType,
+        popupDefaultEnabled: false,
+        metricListEnabled: normalizedField.metricListEnabled !== false
+      });
+      existingPropKeys.add(normalizedField.propKey);
+    };
+
+    const [coreCountsResult, measurementFieldResult, genericComponentResult] = await Promise.all([
+      db.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE COALESCE(occurred_at, received_at) IS NOT NULL)::integer AS occurred_at_count,
+           COUNT(*) FILTER (WHERE latitude IS NOT NULL)::integer AS latitude_count,
+           COUNT(*) FILTER (WHERE longitude IS NOT NULL)::integer AS longitude_count,
+           COUNT(*) FILTER (WHERE altitude_meters IS NOT NULL)::integer AS altitude_meters_count,
+           COUNT(*) FILTER (WHERE accuracy IS NOT NULL)::integer AS accuracy_count,
+           COUNT(*) FILTER (WHERE device_id IS NOT NULL AND btrim(device_id) <> '')::integer AS device_id_count,
+           COUNT(*) FILTER (WHERE device_name IS NOT NULL AND btrim(device_name) <> '')::integer AS device_name_count,
+           COUNT(*) FILTER (WHERE device_type IS NOT NULL AND btrim(device_type) <> '')::integer AS device_type_count,
+           COUNT(*) FILTER (WHERE device_calibration IS NOT NULL AND btrim(device_calibration) <> '')::integer AS device_calibration_count,
+           COUNT(*) FILTER (WHERE firmware_version IS NOT NULL AND btrim(firmware_version) <> '')::integer AS firmware_version_count,
+           COUNT(*) FILTER (WHERE source_reading_id IS NOT NULL AND btrim(source_reading_id) <> '')::integer AS source_reading_id_count,
+           COUNT(*) FILTER (WHERE comment IS NOT NULL AND btrim(comment) <> '')::integer AS comment_count,
+           COUNT(*) FILTER (WHERE custom_text IS NOT NULL AND btrim(custom_text) <> '')::integer AS custom_count
+         FROM readings
+         WHERE datalog_id = $1`,
+        [datalogId]
+      ),
+      db.query(
+        `SELECT prop_key
+         FROM reading_numeric_values
+         WHERE datalog_id = $1
+         GROUP BY prop_key
+         ORDER BY prop_key`,
+        [datalogId]
+      ),
+      db.query(
+        `SELECT component_key AS prop_key
+         FROM readings
+         CROSS JOIN LATERAL jsonb_each_text(COALESCE(extra_json -> $2::text, '{}'::jsonb)) AS component_map(component_key, component_value)
+         WHERE datalog_id = $1
+           AND btrim(component_value) <> ''
+         GROUP BY component_key
+         ORDER BY component_key`,
+        [datalogId, componentsExtraJsonKey]
+      )
+    ]);
+
+    const coreCounts = coreCountsResult.rows[0] ?? {};
+    if (Number(coreCounts.occurred_at_count ?? 0) > 0) {
+      appendField({ propKey: 'occurredAt', valueType: 'time', metricListEnabled: false });
+      appendField({
+        propKey: getAggregateTimePropKey({ value: 'occurredAt' }),
+        valueType: 'time',
+        metricListEnabled: false
+      });
+    }
+    if (Number(coreCounts.latitude_count ?? 0) > 0) {
+      appendField({ propKey: 'latitude', valueType: 'number', metricListEnabled: false });
+    }
+    if (Number(coreCounts.longitude_count ?? 0) > 0) {
+      appendField({ propKey: 'longitude', valueType: 'number', metricListEnabled: false });
+    }
+    if (Number(coreCounts.altitude_meters_count ?? 0) > 0) {
+      appendField({ propKey: 'altitudeMeters', valueType: 'number', metricListEnabled: false });
+    }
+    if (Number(coreCounts.accuracy_count ?? 0) > 0) {
+      appendField({ propKey: 'accuracy', valueType: 'number', metricListEnabled: false });
+    }
+    if (Number(coreCounts.device_id_count ?? 0) > 0) {
+      appendField({ propKey: 'deviceId', valueType: 'string' });
+    }
+
+    for (const field of knownComponentFields) {
+      const countKey = `${field.snakeKey}_count`;
+      if (Number(coreCounts[countKey] ?? 0) > 0) {
+        appendField({ propKey: field.propKey, valueType: 'string' });
+      }
+    }
+
+    for (const row of measurementFieldResult.rows) {
+      appendField({
+        propKey: row.prop_key,
+        valueType: 'number',
+        metricListEnabled: true
+      });
+    }
+
+    for (const row of genericComponentResult.rows) {
+      appendField({
+        propKey: row.prop_key,
+        valueType: 'string'
+      });
+    }
+
+    return autodetectedFields;
   };
 
   const getDatalogDetail = async ({ datalogId, user, correlationId = null, limit = 100, offset = 0 }) => {
     const { datalog, dataset, datalogAccessLevel } = await loadDatalogAccess({ datalogId, user, correlationId });
     const canManageIngest = datalogAccessLevel === 'edit' && datalog.source_type === 'live';
     const supportedFields = resolveStoredSupportedFields({ row: datalog });
-    const [keys, readingsPage, shares, supportedFieldWarnings] = await Promise.all([
+    const [keys, readingsPage, shares, supportedFieldWarnings, autodetectSupportedFields] = await Promise.all([
       canManageIngest ? listDatalogKeys({ datalogId }) : Promise.resolve([]),
       listDatalogReadings({ datalogId, limit, offset }),
+      db.query(
+        `SELECT ds.*, u.username
+         FROM datalog_shares ds
+         JOIN users u ON u.id = ds.target_user_id
+         WHERE ds.datalog_id = $1
+         ORDER BY u.username`,
+        [datalogId]
+      ).then((result) => result.rows.map((row) => ({
+        id: row.id,
+        targetUserId: row.target_user_id,
+        username: row.username,
+        accessLevel: row.access_level,
+        createdBy: row.created_by,
+        createdAt: row.created_at
+      }))),
+      listSupportedFieldWarnings({ datalogId, supportedFields }),
       datalogAccessLevel === 'edit'
-        ? db.query(
-            `SELECT ds.*, u.username
-             FROM datalog_shares ds
-             JOIN users u ON u.id = ds.target_user_id
-             WHERE ds.datalog_id = $1
-             ORDER BY u.username`,
-            [datalogId]
-          ).then((result) => result.rows.map((row) => ({
-            id: row.id,
-            targetUserId: row.target_user_id,
-            username: row.username,
-            accessLevel: row.access_level,
-            createdBy: row.created_by,
-            createdAt: row.created_at
-          })))
-        : Promise.resolve([]),
-      listSupportedFieldWarnings({ datalogId, supportedFields })
+        ? listAutodetectSupportedFields({ datalogId, supportedFields })
+        : Promise.resolve([])
     ]);
+    const hasArchivedOriginal = datalog.source_type === 'import' && Boolean(datalog.raw_file_id);
 
     return {
       ...mapDatalogRow({ row: datalog, supportedFields }),
@@ -849,7 +1095,8 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
         accessLevel: dataset.accessLevel
       },
       canManageIngest,
-      canRestoreOriginal: datalogAccessLevel === 'edit' && datalog.source_type === 'import' && Boolean(datalog.raw_file_id),
+      canRestoreOriginal: datalogAccessLevel === 'edit' && hasArchivedOriginal,
+      originalFileDownloadPath: hasArchivedOriginal ? `/api/datalogs/${datalogId}/original-file` : null,
       ingest: datalog.source_type === 'live'
         ? {
             headerName: ingestKeyHeaderName,
@@ -859,6 +1106,7 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
       keys,
       shares,
       supportedFieldWarnings,
+      autodetectSupportedFields,
       readingsPage
     };
   };
@@ -1171,37 +1419,15 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
 
   const restoreDatalogOriginal = async ({ datalogId, user, correlationId = null }) => {
     const { datalog } = await requireEditableDatalogAccess({ datalogId, user, correlationId });
-
-    if (datalog.source_type !== 'import' || !datalog.raw_file_id) {
-      throw createAppError({
-        caller: 'datalogs::restoreDatalogOriginal',
-        reason: 'Only imported datalogs with archived source files can be restored.',
-        errorKey: 'REQUEST_INVALID',
-        correlationId,
-        status: 400
-      });
-    }
-
-    const rawFileResult = await db.query(
-      `SELECT original_filename, blob_data
-       FROM raw_files
-       WHERE id = $1`,
-      [datalog.raw_file_id]
-    );
-    const rawFile = rawFileResult.rows[0] ?? null;
-    if (!rawFile) {
-      throw createAppError({
-        caller: 'datalogs::restoreDatalogOriginal',
-        reason: 'The archived source file for this datalog could not be found.',
-        errorKey: 'DATASET_NOT_FOUND',
-        correlationId,
-        status: 404
-      });
-    }
+    const rawFile = await loadArchivedOriginalRawFile({
+      datalog,
+      correlationId,
+      caller: 'datalogs::restoreDatalogOriginal'
+    });
 
     const parsed = parseTrackBuffer({
-      buffer: rawFile.blob_data,
-      fileName: rawFile.original_filename,
+      buffer: rawFile.buffer,
+      fileName: rawFile.fileName,
       correlationId
     });
     const supportedFields = resolveStoredSupportedFields({
@@ -1281,6 +1507,15 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
     return {
       datasetId: datalog.dataset_id
     };
+  };
+
+  const getDatalogOriginalFile = async ({ datalogId, user, correlationId = null }) => {
+    const { datalog } = await loadDatalogAccess({ datalogId, user, correlationId });
+    return loadArchivedOriginalRawFile({
+      datalog,
+      correlationId,
+      caller: 'datalogs::getDatalogOriginalFile'
+    });
   };
 
   const upsertDatalogShare = async ({ datalogId, user, targetUserId, accessLevel, correlationId = null }) => {
@@ -1690,20 +1925,25 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
     const payload = {
       accuracy: asOptionalNumber({ value: input.accuracy, field: 'accuracy', correlationId }),
       altitudeMeters: asOptionalNumber({ value: input.altitudeMeters, field: 'altitudeMeters', correlationId }),
-      comment: asTrimmedString({ value: input.comment, field: 'comment', required: false, maxLength: 1000, correlationId }),
-      deviceId: asTrimmedString({ value: input.deviceId, field: 'deviceId', required: false, maxLength: 255, correlationId }),
-      deviceName: asTrimmedString({ value: input.deviceName, field: 'deviceName', required: false, maxLength: 255, correlationId }),
-      deviceType: asTrimmedString({ value: input.deviceType, field: 'deviceType', required: false, maxLength: 255, correlationId }),
-      deviceCalibration: asTrimmedString({ value: input.deviceCalibration, field: 'deviceCalibration', required: false, maxLength: 1000, correlationId }),
-      firmwareVersion: asTrimmedString({ value: input.firmwareVersion, field: 'firmwareVersion', required: false, maxLength: 255, correlationId }),
-      sourceReadingId: asTrimmedString({ value: input.sourceReadingId, field: 'sourceReadingId', required: false, maxLength: 255, correlationId }),
-      custom: asTrimmedString({ value: input.custom, field: 'custom', required: false, maxLength: 4000, correlationId }),
+      deviceId: asTrimmedString({
+        value: input.deviceId ?? asPlainObject(input.components)?.deviceId,
+        field: 'deviceId',
+        required: false,
+        maxLength: 255,
+        correlationId
+      }),
+      components: buildIngestComponents({ input, correlationId }),
       extra: {
         ...collectImplicitExtraValues({ input }),
         ...(asPlainObject(input.extra) ?? {})
       },
       measurements: buildIngestMeasurementValues({ input })
     };
+    const storedComponents = splitStoredComponents({ components: payload.components }).storedColumns;
+    const storedExtraJson = buildStoredExtraJson({
+      extra: payload.extra,
+      components: payload.components
+    });
 
     const inferredSupportedFields = inferSupportedFieldsFromMeasurementSets({
       measurementSets: [payload.measurements]
@@ -1786,17 +2026,17 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
             longitude,
             payload.altitudeMeters,
             payload.accuracy,
-            payload.comment,
+            storedComponents.comment ?? null,
             rowNumber,
-            JSON.stringify(payload.extra),
+            JSON.stringify(storedExtraJson),
             receivedAt,
             payload.deviceId,
-            payload.deviceName,
-            payload.deviceType,
-            payload.deviceCalibration,
-            payload.firmwareVersion,
-            payload.sourceReadingId,
-            payload.custom,
+            storedComponents.deviceName ?? null,
+            storedComponents.deviceType ?? null,
+            storedComponents.deviceCalibration ?? null,
+            storedComponents.firmwareVersion ?? null,
+            storedComponents.sourceReadingId ?? null,
+            storedComponents.custom ?? null,
             datalog.ingest_key_id
           ]
         );
@@ -1855,14 +2095,15 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
             altitudeMeters: payload.altitudeMeters,
             accuracy: payload.accuracy,
             deviceId: payload.deviceId,
-            deviceName: payload.deviceName,
-            deviceType: payload.deviceType,
-            deviceCalibration: payload.deviceCalibration,
-            firmwareVersion: payload.firmwareVersion,
-            sourceReadingId: payload.sourceReadingId,
-            comment: payload.comment,
-            custom: payload.custom,
+            deviceName: storedComponents.deviceName ?? null,
+            deviceType: storedComponents.deviceType ?? null,
+            deviceCalibration: storedComponents.deviceCalibration ?? null,
+            firmwareVersion: storedComponents.firmwareVersion ?? null,
+            sourceReadingId: storedComponents.sourceReadingId ?? null,
+            comment: storedComponents.comment ?? null,
+            custom: storedComponents.custom ?? null,
             measurements: payload.measurements,
+            components: payload.components,
             extra: payload.extra
           }
         };
@@ -1877,7 +2118,7 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
             [normalizedDatalogId]
           )).rows[0]?.id ?? '',
           sourceReadingId: asTrimmedString({
-            value: input.sourceReadingId,
+            value: storedComponents.sourceReadingId,
             field: 'sourceReadingId',
             required: true,
             maxLength: 255,
@@ -1904,6 +2145,7 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
     deleteDatalog,
     updateDatalogReading,
     restoreDatalogOriginal,
+    getDatalogOriginalFile,
     upsertDatalogShare,
     removeDatalogShare,
     createDatalogIngestKey,

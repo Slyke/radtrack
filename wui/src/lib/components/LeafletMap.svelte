@@ -51,6 +51,7 @@
     custom?: string | null;
     occurredAt: string | null;
     receivedAt?: string | null;
+    components?: Record<string, string>;
     extra?: Record<string, unknown>;
   };
 
@@ -290,13 +291,19 @@
   }: {
     extra: Record<string, unknown> | null | undefined;
     metricKey: string;
-  }) => {
+  }): string | number | boolean | null => {
+    const coerceExtraValue = (value: unknown) => (
+      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+        ? value
+        : null
+    );
+
     if (!extra) {
       return null;
     }
 
     if (metricKey in extra) {
-      return extra[metricKey];
+      return coerceExtraValue(extra[metricKey]);
     }
 
     for (const [rawKey, rawValue] of Object.entries(extra)) {
@@ -305,14 +312,20 @@
         || rawKey.toLowerCase() === metricKey.toLowerCase()
         || normalizePropKey(rawKey) === metricKey
       ) {
-        return rawValue;
+        return coerceExtraValue(rawValue);
       }
     }
 
     return null;
   };
 
-  const getPointMetricValue = ({ point, metricKey }: { point: MapPoint; metricKey: string }) => {
+  const getPointMetricValue = ({
+    point,
+    metricKey
+  }: {
+    point: MapPoint;
+    metricKey: string;
+  }): string | number | boolean | null => {
     switch (metricKey) {
       case 'occurredAt': {
         const timestamp = point.occurredAt ?? point.receivedAt;
@@ -347,7 +360,7 @@
       case 'parsedTimeText':
         return point.parsedTimeText ?? null;
       default:
-        return point.measurements?.[metricKey] ?? resolveExtraValue({
+        return point.measurements?.[metricKey] ?? point.components?.[metricKey] ?? resolveExtraValue({
           extra: point.extra,
           metricKey
         }) ?? null;
@@ -660,7 +673,10 @@
         label: getMetricLabel(metricKey),
         value: metricValueTypes[metricKey] === 'string'
           ? (coercePopupString(metricValue) ?? t('radtrack-common_na-label'))
-          : formatMetricValue({ metricKey, value: metricValue })
+          : formatMetricValue({
+            metricKey,
+            value: typeof metricValue === 'boolean' ? String(metricValue) : metricValue
+          })
       }));
     }
 

@@ -34,7 +34,7 @@ Required fields:
 - `occurredAt` or `timestamp`
 - `latitude`
 - `longitude`
-- at least one numeric measurement field such as `doseRate` or `countRate`
+- at least one numeric field inside `measurements` such as `doseRate` or `countRate`
 
 ```bash
 curl -sS -X POST \
@@ -44,7 +44,9 @@ curl -sS -X POST \
     "occurredAt": "2026-04-17T19:15:00.000Z",
     "latitude": 49.2827,
     "longitude": -123.1207,
-    "doseRate": 0.11
+    "measurements": {
+      "doseRate": 0.11
+    }
   }' \
   "$BASE_URL/api/ingest/datalogs/$INGEST_DATALOG_ID/points"
 ```
@@ -53,8 +55,11 @@ curl -sS -X POST \
 
 - If you need to automate live track creation or ingest key generation through authenticated APIs, see [`live-tracks-api-advanced.md`](./live-tracks-api-advanced.md).
 - The plaintext ingest key is only shown when the key is created or rotated.
-- Root-level numeric props are treated as numeric datalog fields when they are not one of the reserved reading metadata props.
-- Root-level non-numeric props are normalized into `extra_json` when they are not one of the reserved reading metadata props.
+- `measurements` is the canonical numeric field bag.
+- `components` is the canonical popup-text field bag.
+- `deviceId` stays at the top level for device identity and popup display.
+- `extra` remains stored metadata and is not intended for autodetected popup fields.
+- For backwards compatibility, root-level numeric props are still accepted as measurement fields and the older top-level metadata props still map into their matching `components` keys.
 - Datalog field definitions support `valueType: "number"`, `valueType: "time"`, and `valueType: "string"`.
 - Reserved synthetic popup-only field keys that may be added manually to a datalog are:
   - `radtrackCacheKey`
@@ -74,20 +79,24 @@ curl -sS -X POST \
     "longitude": -123.1207,
     "accuracy": 4.2,
     "altitudeMeters": 18.5,
-    "usv": 0.11,
-    "countRate": 84,
+    "measurements": {
+      "usv": 0.11,
+      "countRate": 84,
+      "temperatureC": 21.3,
+      "humidityPct": 42,
+      "pressureHpa": 1014.6,
+      "batteryPct": 88
+    },
     "deviceId": "rc-001",
-    "deviceName": "Pocket Gamma",
-    "deviceType": "RadTrack 102",
-    "deviceCalibration": "factory-2026-01",
-    "temperatureC": 21.3,
-    "humidityPct": 42,
-    "pressureHpa": 1014.6,
-    "batteryPct": 88,
-    "firmwareVersion": "1.2.3",
-    "sourceReadingId": "reading-000123",
-    "comment": "Delayed upload after reconnect",
-    "custom": "{\"trip\":\"harbour\"}",
+    "components": {
+      "deviceName": "Pocket Gamma",
+      "deviceType": "RadTrack 102",
+      "deviceCalibration": "factory-2026-01",
+      "firmwareVersion": "1.2.3",
+      "sourceReadingId": "reading-000123",
+      "comment": "Delayed upload after reconnect",
+      "custom": "{\"trip\":\"harbour\"}"
+    },
     "extra": {
       "gpsFix": "3d",
       "satelliteCount": 14
@@ -108,7 +117,9 @@ curl -sS -X POST \
     "timestamp": "2026-04-17T19:20:00.000Z",
     "latitude": 49.2831,
     "longitude": -123.1214,
-    "countRate": 91
+    "measurements": {
+      "countRate": 91
+    }
   }' \
   "$BASE_URL/api/ingest/datalogs/$INGEST_DATALOG_ID/points"
 ```
@@ -125,8 +136,12 @@ curl -i -sS -X POST \
     "occurredAt": "2026-04-17T19:25:00.000Z",
     "latitude": 49.2835,
     "longitude": -123.1222,
-    "doseRate": 0.13,
-    "sourceReadingId": "reading-duplicate-demo"
+    "measurements": {
+      "doseRate": 0.13
+    },
+    "components": {
+      "sourceReadingId": "reading-duplicate-demo"
+    }
   }' \
   "$BASE_URL/api/ingest/datalogs/$INGEST_DATALOG_ID/points"
 ```

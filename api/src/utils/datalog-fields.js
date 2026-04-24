@@ -5,7 +5,8 @@ const coreMetricFields = [
     source: 'core',
     coreColumn: 'occurred_at',
     valueType: 'time',
-    popupDefaultEnabled: true
+    popupDefaultEnabled: true,
+    metricListEnabled: true
   },
   {
     propKey: 'latitude',
@@ -13,7 +14,8 @@ const coreMetricFields = [
     source: 'core',
     coreColumn: 'latitude',
     valueType: 'number',
-    popupDefaultEnabled: true
+    popupDefaultEnabled: true,
+    metricListEnabled: true
   },
   {
     propKey: 'longitude',
@@ -21,7 +23,8 @@ const coreMetricFields = [
     source: 'core',
     coreColumn: 'longitude',
     valueType: 'number',
-    popupDefaultEnabled: true
+    popupDefaultEnabled: true,
+    metricListEnabled: true
   },
   {
     propKey: 'altitudeMeters',
@@ -29,7 +32,8 @@ const coreMetricFields = [
     source: 'core',
     coreColumn: 'altitude_meters',
     valueType: 'number',
-    popupDefaultEnabled: true
+    popupDefaultEnabled: true,
+    metricListEnabled: true
   },
   {
     propKey: 'accuracy',
@@ -37,11 +41,13 @@ const coreMetricFields = [
     source: 'core',
     coreColumn: 'accuracy',
     valueType: 'number',
-    popupDefaultEnabled: true
+    popupDefaultEnabled: true,
+    metricListEnabled: true
   }
 ];
 
 const aggregateTimeSuffix = '_aggregated';
+const aggregateTimeSuffixAliases = [aggregateTimeSuffix, '_aggregate'];
 const aggregateDataCountPropKey = 'radtrackDataCount';
 
 const syntheticPopupFields = [
@@ -50,28 +56,32 @@ const syntheticPopupFields = [
     displayName: 'Data Count',
     source: 'synthetic',
     valueType: 'number',
-    popupDefaultEnabled: true
+    popupDefaultEnabled: true,
+    metricListEnabled: false
   },
   {
     propKey: 'radtrackCacheKey',
     displayName: 'Cache Key',
     source: 'synthetic',
     valueType: 'string',
-    popupDefaultEnabled: false
+    popupDefaultEnabled: false,
+    metricListEnabled: false
   },
   {
     propKey: 'radtrackCacheSource',
     displayName: 'Cache Source',
     source: 'synthetic',
     valueType: 'string',
-    popupDefaultEnabled: false
+    popupDefaultEnabled: false,
+    metricListEnabled: false
   },
   {
     propKey: 'radtrackCacheTtlSeconds',
     displayName: 'Cache TTL',
     source: 'synthetic',
     valueType: 'string',
-    popupDefaultEnabled: false
+    popupDefaultEnabled: false,
+    metricListEnabled: false
   }
 ];
 
@@ -80,12 +90,12 @@ const syntheticPopupFieldMap = new Map(syntheticPopupFields.map((field) => [fiel
 
 const splitAggregateTimeSuffix = ({ value }) => {
   const rawValue = String(value ?? '').trim();
-  const hasAggregateSuffix = rawValue.toLowerCase().endsWith(aggregateTimeSuffix);
+  const matchedSuffix = aggregateTimeSuffixAliases.find((suffix) => rawValue.toLowerCase().endsWith(suffix));
 
   return {
-    hasAggregateSuffix,
-    baseValue: hasAggregateSuffix
-      ? rawValue.slice(0, -aggregateTimeSuffix.length)
+    hasAggregateSuffix: Boolean(matchedSuffix),
+    baseValue: matchedSuffix
+      ? rawValue.slice(0, -matchedSuffix.length)
       : rawValue
   };
 };
@@ -162,6 +172,22 @@ export const getAggregateTimeBasePropKey = ({ value }) => {
 
 export const isAggregateTimePropKey = ({ value }) => Boolean(getAggregateTimeBasePropKey({ value }));
 
+const getAggregateTimeSyntheticField = ({ propKey }) => {
+  const aggregateBasePropKey = getAggregateTimeBasePropKey({ value: propKey });
+  if (!aggregateBasePropKey) {
+    return null;
+  }
+
+  return {
+    propKey,
+    displayName: `${humanizePropKey({ value: aggregateBasePropKey })} (Aggregate)`,
+    source: 'synthetic',
+    valueType: 'time',
+    popupDefaultEnabled: false,
+    metricListEnabled: false
+  };
+};
+
 export const normalizeSupportedFields = ({ value }) => {
   if (!Array.isArray(value)) {
     return [];
@@ -182,7 +208,15 @@ export const normalizeSupportedFields = ({ value }) => {
 
     const coreField = coreMetricFieldMap.get(propKey);
     const syntheticField = syntheticPopupFieldMap.get(propKey);
-    const defaultField = syntheticField ?? coreField ?? null;
+    const aggregateTimeField = getAggregateTimeSyntheticField({ propKey });
+    const defaultField = aggregateTimeField ?? syntheticField ?? coreField ?? null;
+    const hasExplicitPopupDefault = Object.prototype.hasOwnProperty.call(entry, 'popupDefaultEnabled');
+    const hasExplicitMetricList = Object.prototype.hasOwnProperty.call(entry, 'metricListEnabled');
+    const normalizedSource = defaultField?.source ?? 'measurement';
+    const normalizedValueType = defaultField?.valueType
+      ?? (entry.valueType === 'time' || entry.valueType === 'timestamp'
+        ? 'time'
+        : (entry.valueType === 'string' ? 'string' : 'number'));
     const displayName = String(
       entry.displayName
       ?? entry.label
@@ -197,12 +231,14 @@ export const normalizeSupportedFields = ({ value }) => {
     normalized.push({
       propKey,
       displayName,
-      source: defaultField?.source ?? 'measurement',
-      valueType: defaultField?.valueType
-        ?? (entry.valueType === 'time' || entry.valueType === 'timestamp'
-          ? 'time'
-          : (entry.valueType === 'string' ? 'string' : 'number')),
-      popupDefaultEnabled: entry.popupDefaultEnabled !== false
+      source: normalizedSource,
+      valueType: normalizedValueType,
+      popupDefaultEnabled: hasExplicitPopupDefault
+        ? entry.popupDefaultEnabled !== false
+        : (defaultField?.popupDefaultEnabled ?? true),
+      metricListEnabled: hasExplicitMetricList
+        ? entry.metricListEnabled !== false
+        : (defaultField?.metricListEnabled ?? (normalizedSource !== 'synthetic' && normalizedValueType !== 'string'))
     });
     seen.add(propKey);
   }
@@ -221,8 +257,8 @@ export const inferSupportedFieldsFromMeasurementSets = ({ measurementSets }) => 
 
     for (const [rawPropKey, rawValue] of Object.entries(measurementSet)) {
       const propKey = normalizePropKey({ value: rawPropKey });
-      const numericValue = Number(rawValue);
-      if (!propKey || seen.has(propKey) || !Number.isFinite(numericValue)) {
+      const numericValue = coerceMeasurementNumericValue({ value: rawValue });
+      if (!propKey || seen.has(propKey) || numericValue === null) {
         continue;
       }
 
@@ -231,7 +267,8 @@ export const inferSupportedFieldsFromMeasurementSets = ({ measurementSets }) => 
         displayName: humanizePropKey({ value: rawPropKey }) ?? humanizePropKey({ value: propKey }) ?? propKey,
         source: 'measurement',
         valueType: 'number',
-        popupDefaultEnabled: true
+        popupDefaultEnabled: true,
+        metricListEnabled: true
       });
       seen.add(propKey);
     }
@@ -268,7 +305,7 @@ export const mergeMetricFields = ({ supportedFields }) => {
   const merged = [];
   const seen = new Set();
 
-  for (const field of normalizeSupportedFields({ value: supportedFields }).filter((entry) => isPlottableField({ field: entry }))) {
+  for (const field of normalizeSupportedFields({ value: supportedFields }).filter((entry) => isPlottableField({ field: entry }) && entry.metricListEnabled !== false)) {
     if (seen.has(field.propKey)) {
       continue;
     }
@@ -291,8 +328,10 @@ export const mergePopupFields = ({ supportedFields }) => {
 
     merged.push({ ...field });
     seen.add(field.propKey);
+  }
 
-    if (field.valueType !== 'time') {
+  for (const field of normalizeSupportedFields({ value: supportedFields })) {
+    if (field.valueType !== 'time' || isAggregateTimePropKey({ value: field.propKey })) {
       continue;
     }
 
@@ -306,7 +345,8 @@ export const mergePopupFields = ({ supportedFields }) => {
       displayName: `${field.displayName} (Aggregate)`,
       source: 'synthetic',
       valueType: 'time',
-      popupDefaultEnabled: field.popupDefaultEnabled
+      popupDefaultEnabled: field.popupDefaultEnabled,
+      metricListEnabled: false
     });
     seen.add(aggregateFieldPropKey);
   }
@@ -372,6 +412,30 @@ export const rowHasSupportedFieldValue = ({ field, row }) => {
   return Number.isFinite(Number(value));
 };
 
+export const coerceMeasurementNumericValue = ({ value }) => {
+  if (value === undefined || value === null || value === '') {
+    return null;
+  }
+
+  if (typeof value === 'string') {
+    const trimmedValue = value.trim();
+    if (!trimmedValue) {
+      return null;
+    }
+
+    const numericValue = Number(trimmedValue);
+    if (Number.isFinite(numericValue)) {
+      return numericValue;
+    }
+
+    const integerValue = Number.parseInt(trimmedValue, 10);
+    return Number.isFinite(integerValue) ? integerValue : null;
+  }
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
+};
+
 export const coerceMeasurementValueMap = ({ input }) => {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return {};
@@ -384,8 +448,8 @@ export const coerceMeasurementValueMap = ({ input }) => {
       continue;
     }
 
-    const numericValue = Number(rawValue);
-    if (!Number.isFinite(numericValue)) {
+    const numericValue = coerceMeasurementNumericValue({ value: rawValue });
+    if (numericValue === null) {
       continue;
     }
 

@@ -54,6 +54,9 @@ export const createExportService = ({ db, queryService, settingsService }) => {
       comment: comment || undefined,
       custom: point.custom,
       measurements: point.measurements,
+      components: isPlainObject(point.components) && Object.keys(point.components).length
+        ? point.components
+        : undefined,
       extra
     });
   };

@@ -33,6 +33,11 @@ const sendJson = ({ res, status = 200, body }) => {
   res.status(status).json(body);
 };
 
+const toAttachmentFileName = ({ value, fallback = 'download.bin' }) => {
+  const normalized = String(value ?? '').replace(/["\r\n]/g, '_').trim();
+  return normalized || fallback;
+};
+
 const invalidateDatasetsSafely = async ({
   logger,
   queryService,
@@ -878,6 +883,25 @@ const main = async () => {
         })
       }
     });
+  }));
+
+  app.get('/api/datalogs/:datalogId/original-file', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    const result = await datalogService.getDatalogOriginalFile({
+      datalogId: req.params.datalogId,
+      user: auth.user,
+      correlationId: req.correlationId
+    });
+    const fileName = toAttachmentFileName({
+      value: result.fileName,
+      fallback: `datalog-${req.params.datalogId}.bin`
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Content-Length', String(result.buffer.length));
+    res.status(200).send(result.buffer);
   }));
 
   app.patch('/api/datalogs/:datalogId', asyncHandler(async (req, res) => {

@@ -4,17 +4,19 @@ export type MetricField = {
   source: 'core' | 'measurement' | 'synthetic';
   valueType: 'number' | 'time' | 'string';
   popupDefaultEnabled: boolean;
+  metricListEnabled: boolean;
 };
 
 const aggregateTimeSuffix = '_aggregated';
+const aggregateTimeSuffixAliases = [aggregateTimeSuffix, '_aggregate'];
 export const aggregateDataCountPropKey = 'radtrackDataCount';
 
 export const coreMetricFields: MetricField[] = [
-  { propKey: 'occurredAt', displayName: 'Time', source: 'core', valueType: 'time', popupDefaultEnabled: true },
-  { propKey: 'latitude', displayName: 'Latitude', source: 'core', valueType: 'number', popupDefaultEnabled: true },
-  { propKey: 'longitude', displayName: 'Longitude', source: 'core', valueType: 'number', popupDefaultEnabled: true },
-  { propKey: 'altitudeMeters', displayName: 'Altitude', source: 'core', valueType: 'number', popupDefaultEnabled: true },
-  { propKey: 'accuracy', displayName: 'Accuracy', source: 'core', valueType: 'number', popupDefaultEnabled: true }
+  { propKey: 'occurredAt', displayName: 'Time', source: 'core', valueType: 'time', popupDefaultEnabled: true, metricListEnabled: true },
+  { propKey: 'latitude', displayName: 'Latitude', source: 'core', valueType: 'number', popupDefaultEnabled: true, metricListEnabled: true },
+  { propKey: 'longitude', displayName: 'Longitude', source: 'core', valueType: 'number', popupDefaultEnabled: true, metricListEnabled: true },
+  { propKey: 'altitudeMeters', displayName: 'Altitude', source: 'core', valueType: 'number', popupDefaultEnabled: true, metricListEnabled: true },
+  { propKey: 'accuracy', displayName: 'Accuracy', source: 'core', valueType: 'number', popupDefaultEnabled: true, metricListEnabled: true }
 ];
 
 export const syntheticPopupFields: MetricField[] = [
@@ -23,11 +25,12 @@ export const syntheticPopupFields: MetricField[] = [
     displayName: 'Data Count',
     source: 'synthetic',
     valueType: 'number',
-    popupDefaultEnabled: true
+    popupDefaultEnabled: true,
+    metricListEnabled: false
   },
-  { propKey: 'radtrackCacheKey', displayName: 'Cache Key', source: 'synthetic', valueType: 'string', popupDefaultEnabled: false },
-  { propKey: 'radtrackCacheSource', displayName: 'Cache Source', source: 'synthetic', valueType: 'string', popupDefaultEnabled: false },
-  { propKey: 'radtrackCacheTtlSeconds', displayName: 'Cache TTL', source: 'synthetic', valueType: 'string', popupDefaultEnabled: false }
+  { propKey: 'radtrackCacheKey', displayName: 'Cache Key', source: 'synthetic', valueType: 'string', popupDefaultEnabled: false, metricListEnabled: false },
+  { propKey: 'radtrackCacheSource', displayName: 'Cache Source', source: 'synthetic', valueType: 'string', popupDefaultEnabled: false, metricListEnabled: false },
+  { propKey: 'radtrackCacheTtlSeconds', displayName: 'Cache TTL', source: 'synthetic', valueType: 'string', popupDefaultEnabled: false, metricListEnabled: false }
 ];
 
 const coreMetricFieldMap = new Map(coreMetricFields.map((field) => [field.propKey, field] as const));
@@ -35,12 +38,12 @@ const syntheticPopupFieldMap = new Map(syntheticPopupFields.map((field) => [fiel
 
 const splitAggregateTimeSuffix = (value: string | null | undefined) => {
   const rawValue = String(value ?? '').trim();
-  const hasAggregateSuffix = rawValue.toLowerCase().endsWith(aggregateTimeSuffix);
+  const matchedSuffix = aggregateTimeSuffixAliases.find((suffix) => rawValue.toLowerCase().endsWith(suffix));
 
   return {
-    hasAggregateSuffix,
-    baseValue: hasAggregateSuffix
-      ? rawValue.slice(0, -aggregateTimeSuffix.length)
+    hasAggregateSuffix: Boolean(matchedSuffix),
+    baseValue: matchedSuffix
+      ? rawValue.slice(0, -matchedSuffix.length)
       : rawValue
   };
 };
@@ -114,6 +117,22 @@ export const isAggregateTimePropKey = (value: string | null | undefined) => (
   Boolean(getAggregateTimeBasePropKey(value))
 );
 
+const getAggregateTimeSyntheticField = (propKey: string) => {
+  const aggregateBasePropKey = getAggregateTimeBasePropKey(propKey);
+  if (!aggregateBasePropKey) {
+    return null;
+  }
+
+  return {
+    propKey,
+    displayName: `${humanizePropKey(aggregateBasePropKey)} (Aggregate)`,
+    source: 'synthetic' as const,
+    valueType: 'time' as const,
+    popupDefaultEnabled: false,
+    metricListEnabled: false
+  };
+};
+
 export const normalizeSupportedFields = (value: unknown): MetricField[] => {
   if (!Array.isArray(value)) {
     return [];
@@ -135,7 +154,15 @@ export const normalizeSupportedFields = (value: unknown): MetricField[] => {
 
     const coreField = coreMetricFieldMap.get(propKey);
     const syntheticField = syntheticPopupFieldMap.get(propKey);
-    const defaultField = syntheticField ?? coreField ?? null;
+    const aggregateTimeField = getAggregateTimeSyntheticField(propKey);
+    const defaultField = aggregateTimeField ?? syntheticField ?? coreField ?? null;
+    const hasExplicitPopupDefault = Object.prototype.hasOwnProperty.call(record, 'popupDefaultEnabled');
+    const hasExplicitMetricList = Object.prototype.hasOwnProperty.call(record, 'metricListEnabled');
+    const normalizedSource = defaultField?.source ?? 'measurement';
+    const normalizedValueType = defaultField?.valueType
+      ?? (record.valueType === 'time' || record.valueType === 'timestamp'
+        ? 'time'
+        : (record.valueType === 'string' ? 'string' : 'number'));
     const displayName = String(
       record.displayName
       ?? record.label
@@ -149,12 +176,14 @@ export const normalizeSupportedFields = (value: unknown): MetricField[] => {
     normalized.push({
       propKey,
       displayName,
-      source: defaultField?.source ?? 'measurement',
-      valueType: defaultField?.valueType
-        ?? (record.valueType === 'time' || record.valueType === 'timestamp'
-          ? 'time'
-          : (record.valueType === 'string' ? 'string' : 'number')),
-      popupDefaultEnabled: record.popupDefaultEnabled !== false
+      source: normalizedSource,
+      valueType: normalizedValueType,
+      popupDefaultEnabled: hasExplicitPopupDefault
+        ? record.popupDefaultEnabled !== false
+        : (defaultField?.popupDefaultEnabled ?? true),
+      metricListEnabled: hasExplicitMetricList
+        ? record.metricListEnabled !== false
+        : (defaultField?.metricListEnabled ?? (normalizedSource !== 'synthetic' && normalizedValueType !== 'string'))
     });
     seen.add(propKey);
   }
@@ -166,7 +195,7 @@ export const mergeMetricFields = (supportedFields: MetricField[]): MetricField[]
   const merged: MetricField[] = [];
   const seen = new Set<string>();
 
-  for (const field of supportedFields.filter((entry) => isPlottableField(entry))) {
+  for (const field of supportedFields.filter((entry) => isPlottableField(entry) && entry.metricListEnabled !== false)) {
     if (seen.has(field.propKey)) {
       continue;
     }
@@ -179,18 +208,21 @@ export const mergeMetricFields = (supportedFields: MetricField[]): MetricField[]
 };
 
 export const mergePopupFields = (supportedFields: MetricField[]): MetricField[] => {
+  const normalizedFields = normalizeSupportedFields(supportedFields);
   const merged: MetricField[] = [];
   const seen = new Set<string>();
 
-  for (const field of supportedFields) {
+  for (const field of normalizedFields) {
     if (seen.has(field.propKey)) {
       continue;
     }
 
     merged.push(field);
     seen.add(field.propKey);
+  }
 
-    if (field.valueType !== 'time') {
+  for (const field of normalizedFields) {
+    if (field.valueType !== 'time' || isAggregateTimePropKey(field.propKey)) {
       continue;
     }
 
@@ -204,7 +236,8 @@ export const mergePopupFields = (supportedFields: MetricField[]): MetricField[] 
       displayName: `${field.displayName} (Aggregate)`,
       source: 'synthetic',
       valueType: 'time',
-      popupDefaultEnabled: field.popupDefaultEnabled
+      popupDefaultEnabled: field.popupDefaultEnabled,
+      metricListEnabled: false
     });
     seen.add(aggregateFieldPropKey);
   }

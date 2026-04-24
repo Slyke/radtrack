@@ -4,9 +4,11 @@ import { logError } from '../lib/logger.js';
 import {
   coerceMeasurementValueMap,
   inferSupportedFieldsFromMeasurementSets,
+  normalizePropKey,
   normalizeSupportedFields,
   rowHasSupportedFieldValue
 } from '../utils/datalog-fields.js';
+import { componentsExtraJsonKey, knownComponentFields } from '../utils/datalog-components.js';
 import { createOpaqueId, sha256Hex } from '../utils/ids.js';
 import {
   computeParsedTrackSemanticChecksum,
@@ -16,6 +18,8 @@ import {
   parseTrackBuffer
 } from '../utils/track.js';
 import { canImport } from './permissions.js';
+
+const knownComponentPropKeySet = new Set(knownComponentFields.map((field) => field.propKey));
 
 const batchInsertReadings = async ({ client, datalogId, rows, actorCreatedAt }) => {
   const chunkSize = 250;
@@ -313,6 +317,28 @@ const normalizeBackupPoint = ({ point, index, correlationId = null }) => {
     });
   }
 
+  const componentValues = {};
+  const rawComponents = asObject(normalizedPoint.components) ?? {};
+  for (const [rawKey, rawValue] of Object.entries(rawComponents)) {
+    const propKey = normalizePropKey({ value: rawKey });
+    const value = asStringOrNull(rawValue);
+    if (!propKey || !value || propKey === 'deviceId') {
+      continue;
+    }
+
+    componentValues[propKey] = value;
+  }
+
+  const genericComponents = Object.fromEntries(
+    Object.entries(componentValues).filter(([propKey]) => !knownComponentPropKeySet.has(propKey))
+  );
+  const extraJson = {
+    ...(asObject(normalizedPoint.extraJson) ?? asObject(normalizedPoint.extra) ?? {}),
+    ...(Object.keys(genericComponents).length
+      ? { [componentsExtraJsonKey]: genericComponents }
+      : {})
+  };
+
   return {
     rawTimestamp: asStringOrNull(normalizedPoint.rawTimestamp),
     parsedTimeText: asStringOrNull(normalizedPoint.parsedTimeText),
@@ -328,16 +354,16 @@ const normalizeBackupPoint = ({ point, index, correlationId = null }) => {
         ?? {}
     }),
     deviceId: asStringOrNull(normalizedPoint.deviceId),
-    deviceName: asStringOrNull(normalizedPoint.deviceName),
-    deviceType: asStringOrNull(normalizedPoint.deviceType),
-    deviceCalibration: asStringOrNull(normalizedPoint.deviceCalibration),
-    firmwareVersion: asStringOrNull(normalizedPoint.firmwareVersion),
-    sourceReadingId: asStringOrNull(normalizedPoint.sourceReadingId),
-    comment: asStringOrNull(normalizedPoint.comment) ?? '',
-    custom: asStringOrNull(normalizedPoint.custom),
+    deviceName: componentValues.deviceName ?? asStringOrNull(normalizedPoint.deviceName),
+    deviceType: componentValues.deviceType ?? asStringOrNull(normalizedPoint.deviceType),
+    deviceCalibration: componentValues.deviceCalibration ?? asStringOrNull(normalizedPoint.deviceCalibration),
+    firmwareVersion: componentValues.firmwareVersion ?? asStringOrNull(normalizedPoint.firmwareVersion),
+    sourceReadingId: componentValues.sourceReadingId ?? asStringOrNull(normalizedPoint.sourceReadingId),
+    comment: componentValues.comment ?? asStringOrNull(normalizedPoint.comment) ?? '',
+    custom: componentValues.custom ?? asStringOrNull(normalizedPoint.custom),
     rowNumber: Number.isInteger(normalizedPoint.rowNumber) ? normalizedPoint.rowNumber : index + 1,
     warningFlags: Array.isArray(normalizedPoint.warningFlags) ? normalizedPoint.warningFlags.map(String) : [],
-    extraJson: asObject(normalizedPoint.extra) ?? {}
+    extraJson
   };
 };
 
@@ -371,6 +397,17 @@ const buildBackupParsedShape = ({ trackMeta, rows }) => ({
     altitudeMeters: row.altitudeMeters ?? null,
     accuracy: row.accuracy ?? null,
     deviceId: row.deviceId ?? null,
+    components: Object.fromEntries(
+      Object.entries({
+        deviceName: row.deviceName ?? null,
+        deviceType: row.deviceType ?? null,
+        deviceCalibration: row.deviceCalibration ?? null,
+        firmwareVersion: row.firmwareVersion ?? null,
+        sourceReadingId: row.sourceReadingId ?? null,
+        comment: row.comment ?? '',
+        custom: row.custom ?? null
+      }).filter(([, value]) => value !== null && value !== '')
+    ),
     deviceName: row.deviceName ?? null,
     deviceType: row.deviceType ?? null,
     deviceCalibration: row.deviceCalibration ?? null,
