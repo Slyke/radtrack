@@ -134,6 +134,7 @@
       zoom: number;
     };
     selectpoint: MapPoint;
+    openaggregatecellpoints: AggregateCell;
   }>();
 
   const t = (key: string, values: Record<string, unknown> = {}) => translateMessage({
@@ -641,18 +642,25 @@
   const buildPopupHeaderHtml = ({
     title,
     subtitle = null,
-    badge = null
+    badge = null,
+    actionsHtml = ''
   }: {
     title: string;
     subtitle?: string | null;
     badge?: string | null;
+    actionsHtml?: string;
   }) => `
     <div class="map-popup-header">
       <div class="map-popup-heading">
         <div class="map-popup-title">${escapeHtml(title)}</div>
         ${subtitle ? `<div class="map-popup-subtitle">${escapeHtml(subtitle)}</div>` : ''}
       </div>
-      ${badge ? `<span class="map-popup-badge">${escapeHtml(badge)}</span>` : ''}
+      ${(badge || actionsHtml) ? `
+        <div class="map-popup-header-actions">
+          ${badge ? `<span class="map-popup-badge">${escapeHtml(badge)}</span>` : ''}
+          ${actionsHtml}
+        </div>
+      ` : ''}
     </div>
   `;
 
@@ -708,6 +716,14 @@
     const badge = popupFields.metrics[aggregateDataCountPropKey]
       ? `${formatNumber(cell.pointCount)} ${t('radtrack-map_popup_points-label')}`
       : null;
+    const actionsHtml = `
+      <button
+        class="map-popup-link-button"
+        data-cell-id="${escapeHtml(cell.id)}"
+        data-map-popup-action="open-aggregate-cell-points"
+        type="button"
+      >${escapeHtml(t('radtrack-map_popup_view_points-button'))}</button>
+    `;
 
     for (const [metricKey, enabled] of Object.entries(popupFields.metrics)) {
       if (!enabled || metricKey === aggregateDataCountPropKey || metricKey === 'occurredAt') {
@@ -803,11 +819,37 @@
         ${buildPopupHeaderHtml({
           title: t('radtrack-map_popup_aggregate-title'),
           subtitle: timeRange,
-          badge
+          badge,
+          actionsHtml
         })}
         ${sections.length ? `<div class="map-popup-scroll">${sections.join('')}</div>` : ''}
       </div>
     `;
+  };
+
+  const handleContainerClick = (event: MouseEvent) => {
+    const target = event.target instanceof Element
+      ? event.target
+      : null;
+    const actionButton = target?.closest('[data-map-popup-action="open-aggregate-cell-points"]');
+    if (!actionButton) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const cellId = actionButton.getAttribute('data-cell-id');
+    if (!cellId) {
+      return;
+    }
+
+    const cell = aggregates.find((entry) => entry.id === cellId);
+    if (!cell) {
+      return;
+    }
+
+    dispatch('openaggregatecellpoints', cell);
   };
 
   const emitViewport = () => {
@@ -1124,6 +1166,7 @@
     map = leaflet.map(container, {
       zoomControl: true
     }).setView([41.9, -87.7], 9);
+    container.addEventListener('click', handleContainerClick);
 
     if (!map.getPane(overlayPane)) {
       map.createPane(overlayPane);
@@ -1154,6 +1197,7 @@
   });
 
   onDestroy(() => {
+    container?.removeEventListener('click', handleContainerClick);
     resizeObserver?.disconnect();
     map?.remove();
   });
@@ -1242,6 +1286,14 @@
     gap: 0.75rem;
   }
 
+  .map-container :global(.map-popup-header-actions) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.55rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
   .map-container :global(.map-popup-heading) {
     display: grid;
     gap: 0.2rem;
@@ -1267,6 +1319,33 @@
     border: 1px solid var(--color-start);
     background: var(--color-start-soft);
     color: var(--color-text);
+  }
+
+  .map-container :global(.map-popup-link-button) {
+    min-height: auto;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    border-bottom-width: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--color-start);
+    font-size: 0.86rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    text-decoration: underline;
+    text-underline-offset: 0.12rem;
+    transform: none;
+  }
+
+  .map-container :global(.map-popup-link-button:hover),
+  .map-container :global(.map-popup-link-button:focus-visible),
+  .map-container :global(.map-popup-link-button:active) {
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    color: var(--color-mid);
+    transform: none;
   }
 
   .map-container :global(.map-popup-section) {

@@ -4,12 +4,16 @@
   import { browser } from '$app/environment';
   import { onDestroy, onMount, untrack } from 'svelte';
   import LeafletMap from '$lib/components/LeafletMap.svelte';
+  import MapAggregatePointsModal from '$lib/components/MapAggregatePointsModal.svelte';
   import { apiFetch } from '$lib/api/client';
   import {
+    aggregateDataCountPropKey,
+    getAggregateTimeBasePropKey,
     getMetricOptionLabels,
     humanizePropKey,
     isAggregateTimePropKey,
     mergePopupFields,
+    normalizePropKey,
     normalizeSupportedFields,
     type MetricField
   } from '$lib/datalog-fields';
@@ -90,6 +94,27 @@
     comment: string | null;
     components?: Record<string, string>;
     extra?: Record<string, unknown>;
+  };
+
+  type AggregateCellModalState = {
+    cellId: string;
+    queryKey: string;
+    shape: AppliedMapFilters['shape'];
+    cellSizeMeters: number;
+    cell: AggregateCell;
+  };
+
+  type AggregateCellModalColumn = {
+    propKey: string;
+    label: string;
+    valueType: 'number' | 'time' | 'string';
+  };
+
+  type AggregateCellModalValue = string | number | boolean | null;
+
+  type AggregateCellModalRow = {
+    id: string;
+    values: Record<string, AggregateCellModalValue>;
   };
 
   type DatasetOption = {
@@ -757,6 +782,12 @@
   let lookupsReady = $state(false);
   let autoUpdateMap = $state(true);
   let selectedPoint = $state<MapPoint | null>(null);
+  let aggregateCellModalState = $state<AggregateCellModalState | null>(null);
+  let aggregateCellModalPoints = $state<MapPoint[]>([]);
+  let aggregateCellModalErrorMessage = $state<string | null>(null);
+  let aggregateCellModalLoading = $state(false);
+  let aggregateCellModalRequestVersion = 0;
+  let popupMaxHeightPx = $state(260);
   let viewport = $state(createInitialViewport());
   let filters = $state(createInitialFilters());
   let filterUrlSyncReady = $state(false);
@@ -777,6 +808,8 @@
   let mapFieldVisibility = $state<MapFieldVisibilityRecord>({});
   let sidebarSize = $state<SidebarSize>('large');
   let sidebarUpdateTimer: ReturnType<typeof setTimeout> | null = null;
+  let mapStageElement: HTMLDivElement;
+  let mapStageResizeObserver: ResizeObserver | null = null;
   let queuedSidebarSnapshot: {
     query: MapQuerySnapshot;
     popupState: PopupStateSnapshot;
@@ -825,6 +858,148 @@
     }
 
     return value.slice(-8);
+  };
+
+  const formatAggregateTimeRange = ({
+    timeRange
+  }: {
+    timeRange: AggregateCell['timeRange'];
+  }) => {
+    if (!timeRange.start && !timeRange.end) {
+      return null;
+    }
+
+    if (timeRange.start && timeRange.end && timeRange.start !== timeRange.end) {
+      return `${formatTime(timeRange.start)} -> ${formatTime(timeRange.end)}`;
+    }
+
+    return formatTime(timeRange.start ?? timeRange.end);
+  };
+
+  const updatePopupMaxHeight = () => {
+    if (!mapStageElement) {
+      return;
+    }
+
+    popupMaxHeightPx = Math.max(
+      260,
+      Math.floor(mapStageElement.clientHeight / 2) + 20
+    );
+  };
+
+  const resolveExtraValue = ({
+    extra,
+    propKey
+  }: {
+    extra: Record<string, unknown> | null | undefined;
+    propKey: string;
+  }): string | number | boolean | null => {
+    const coerceValue = (value: unknown) => (
+      typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+        ? value
+        : null
+    );
+
+    if (!extra) {
+      return null;
+    }
+
+    if (propKey in extra) {
+      return coerceValue(extra[propKey]);
+    }
+
+    for (const [rawKey, rawValue] of Object.entries(extra)) {
+      if (
+        rawKey === propKey
+        || rawKey.toLowerCase() === propKey.toLowerCase()
+        || normalizePropKey(rawKey) === propKey
+      ) {
+        return coerceValue(rawValue);
+      }
+    }
+
+    return null;
+  };
+
+  const resolveAggregateCellSyntheticValue = ({
+    cell,
+    propKey
+  }: {
+    cell: AggregateCell | null;
+    propKey: string;
+  }): AggregateCellModalValue => {
+    if (!cell) {
+      return null;
+    }
+
+    switch (propKey) {
+      case 'radtrackCacheKey':
+        return cell.cache?.key ?? null;
+      case 'radtrackCacheSource':
+        return cell.cache?.source
+          ? (cell.cache.reason ? `${cell.cache.source} (${cell.cache.reason})` : cell.cache.source)
+          : null;
+      case 'radtrackCacheTtlSeconds':
+        return cell.cache?.ttlSecondsRemaining ?? null;
+      default:
+        return null;
+    }
+  };
+
+  const getPointPopupFieldValue = ({
+    point,
+    propKey,
+    cell
+  }: {
+    point: MapPoint;
+    propKey: string;
+    cell: AggregateCell | null;
+  }): AggregateCellModalValue => {
+    switch (propKey) {
+      case 'occurredAt': {
+        const timestamp = point.occurredAt ?? point.receivedAt;
+        return timestamp ? Date.parse(timestamp) : null;
+      }
+      case 'latitude':
+        return point.latitude;
+      case 'longitude':
+        return point.longitude;
+      case 'altitudeMeters':
+        return point.altitudeMeters;
+      case 'accuracy':
+        return point.accuracy;
+      case 'deviceId':
+        return point.deviceId ?? null;
+      case 'deviceName':
+        return point.deviceName ?? null;
+      case 'deviceType':
+        return point.deviceType ?? null;
+      case 'deviceCalibration':
+        return point.deviceCalibration ?? null;
+      case 'firmwareVersion':
+        return point.firmwareVersion ?? null;
+      case 'sourceReadingId':
+        return point.sourceReadingId ?? null;
+      case 'comment':
+        return point.comment ?? null;
+      case 'custom':
+        return point.custom ?? null;
+      case 'rawTimestamp':
+        return point.rawTimestamp ?? null;
+      case 'parsedTimeText':
+        return point.parsedTimeText ?? null;
+      case 'radtrackCacheKey':
+      case 'radtrackCacheSource':
+      case 'radtrackCacheTtlSeconds':
+        return resolveAggregateCellSyntheticValue({ cell, propKey });
+      default:
+        return point.measurements?.[propKey]
+          ?? point.components?.[propKey]
+          ?? resolveExtraValue({
+            extra: point.extra,
+            propKey
+          });
+    }
   };
 
   const toUrlNumber = (value: string | null) => (
@@ -1216,7 +1391,6 @@
     if (
       latitude === null
       || longitude === null
-      || zoom === null
       || latitude < -90
       || latitude > 90
       || longitude < -180
@@ -1230,7 +1404,9 @@
       latitude,
       longitude,
       source: 'url',
-      zoom: Math.max(1, Math.min(18, Math.round(zoom)))
+      zoom: zoom === null
+        ? viewport.zoom
+        : Math.max(1, Math.min(18, Math.round(zoom)))
     });
   };
 
@@ -1806,6 +1982,43 @@
     .filter((field) => pendingPopupMetricStates[field.propKey]));
   const appliedVisiblePopupFields = $derived.by(() => appliedAvailablePopupFields
     .filter((field) => appliedPopupMetricStates[field.propKey]));
+  const aggregateCellModalColumns = $derived.by<AggregateCellModalColumn[]>(() => {
+    const columns = new Map<string, AggregateCellModalColumn>();
+
+    for (const field of appliedVisiblePopupFields) {
+      if (field.propKey === aggregateDataCountPropKey) {
+        continue;
+      }
+
+      const aggregateBasePropKey = getAggregateTimeBasePropKey(field.propKey);
+      const propKey = aggregateBasePropKey ?? field.propKey;
+      if (columns.has(propKey)) {
+        continue;
+      }
+
+      columns.set(propKey, {
+        propKey,
+        label: aggregateBasePropKey ? humanizePropKey(propKey) : field.displayName,
+        valueType: aggregateBasePropKey ? 'time' : field.valueType
+      });
+    }
+
+    if (!columns.size) {
+      for (const field of normalizeSupportedFields([
+        { propKey: 'occurredAt' },
+        { propKey: 'latitude' },
+        { propKey: 'longitude' }
+      ])) {
+        columns.set(field.propKey, {
+          propKey: field.propKey,
+          label: field.displayName,
+          valueType: field.valueType
+        });
+      }
+    }
+
+    return [...columns.values()];
+  });
   const appliedVisiblePointMetricFields = $derived.by(() => appliedVisiblePopupFields
     .filter((field) => (
       field.valueType !== 'string'
@@ -1814,6 +2027,43 @@
       && !['occurredAt', 'latitude', 'longitude'].includes(field.propKey)
     )));
   const enabledPopupFieldCount = $derived.by(() => visiblePopupFields.length);
+  const aggregateCellModalCurrentCell = $derived.by(() => {
+    if (!aggregateCellModalState || !activeQuery || activeQuery.key !== aggregateCellModalState.queryKey) {
+      return null;
+    }
+
+    if (
+      activeMode !== 'aggregate'
+      || activeShape !== aggregateCellModalState.shape
+      || getAppliedCellSizeMeters({
+        filters: activeQuery.filters,
+        viewport: activeQuery.viewport
+      }) !== aggregateCellModalState.cellSizeMeters
+    ) {
+      return null;
+    }
+
+    return aggregates.find((cell) => cell.id === aggregateCellModalState.cellId) ?? null;
+  });
+  const aggregateCellModalDisplayCell = $derived.by(() => (
+    aggregateCellModalCurrentCell
+    ?? aggregateCellModalState?.cell
+    ?? null
+  ));
+  const aggregateCellModalSubtitle = $derived.by(() => aggregateCellModalDisplayCell
+    ? formatAggregateTimeRange({ timeRange: aggregateCellModalDisplayCell.timeRange })
+    : null);
+  const aggregateCellModalRows = $derived.by<AggregateCellModalRow[]>(() => aggregateCellModalPoints.map((point) => ({
+    id: point.id,
+    values: Object.fromEntries(aggregateCellModalColumns.map((column) => [
+      column.propKey,
+      getPointPopupFieldValue({
+        point,
+        propKey: column.propKey,
+        cell: aggregateCellModalDisplayCell
+      })
+    ]))
+  })));
   const trackSelectionSummary = $derived.by(() => {
     if (!filters.datasetIds.length || filters.trackSelectionMode === 'none') {
       return t('radtrack-common_none');
@@ -2019,6 +2269,81 @@
     ...buildTimeFilterQuery({ sourceFilters: snapshot.filters })
   });
 
+  const closeAggregateCellModal = () => {
+    aggregateCellModalRequestVersion += 1;
+    aggregateCellModalState = null;
+    aggregateCellModalPoints = [];
+    aggregateCellModalErrorMessage = null;
+    aggregateCellModalLoading = false;
+  };
+
+  const openAggregateCellModal = ({ cell }: { cell: AggregateCell }) => {
+    if (!activeQuery) {
+      return;
+    }
+
+    aggregateCellModalState = {
+      cellId: cell.id,
+      queryKey: activeQuery.key,
+      shape: activeQuery.filters.shape,
+      cellSizeMeters: activeQuery.filters.appliedCellSizeMeters,
+      cell
+    };
+    aggregateCellModalErrorMessage = null;
+    aggregateCellModalPoints = [];
+  };
+
+  const loadAggregateCellPoints = async ({
+    modalState,
+    snapshot
+  }: {
+    modalState: AggregateCellModalState;
+    snapshot: MapQuerySnapshot;
+  }) => {
+    const requestId = ++aggregateCellModalRequestVersion;
+    aggregateCellModalLoading = true;
+    aggregateCellModalErrorMessage = null;
+
+    try {
+      const response = await apiFetch<any>({
+        path: '/api/map/aggregate-cell-points',
+        query: {
+          ...buildBaseQuery({
+            includeViewport: false,
+            snapshot
+          }),
+          shape: modalState.shape,
+          cellSizeMeters: modalState.cellSizeMeters,
+          cellId: modalState.cellId
+        }
+      });
+
+      if (
+        requestId !== aggregateCellModalRequestVersion
+        || !aggregateCellModalState
+        || aggregateCellModalState.cellId !== modalState.cellId
+      ) {
+        return;
+      }
+
+      aggregateCellModalPoints = response.result.points;
+    } catch (error) {
+      if (requestId !== aggregateCellModalRequestVersion) {
+        return;
+      }
+
+      aggregateCellModalErrorMessage = error instanceof Error
+        ? error.message
+        : t('radtrack-map_failed');
+    } finally {
+      if (requestId !== aggregateCellModalRequestVersion) {
+        return;
+      }
+
+      aggregateCellModalLoading = false;
+    }
+  };
+
   const createMapFocus = ({
     latitude,
     longitude,
@@ -2101,6 +2426,7 @@
           includeViewport: false,
           snapshot
         }),
+        requireCoordinates: true,
         limit: 1
       }
     });
@@ -2557,6 +2883,14 @@
   };
 
   onMount(async () => {
+    if (mapStageElement) {
+      updatePopupMaxHeight();
+      mapStageResizeObserver = new ResizeObserver(() => {
+        updatePopupMaxHeight();
+      });
+      mapStageResizeObserver.observe(mapStageElement);
+    }
+
     loadMapPreferences();
     await loadLookups();
     const focusedMap = await initializeMapFocus();
@@ -2573,7 +2907,33 @@
   });
 
   onDestroy(() => {
+    mapStageResizeObserver?.disconnect();
     clearScheduledSidebarUpdate();
+  });
+
+  $effect(() => {
+    const modalState = aggregateCellModalState;
+    const snapshot = activeQuery;
+
+    if (!modalState) {
+      return;
+    }
+
+    if (
+      !snapshot
+      || activeMode !== 'aggregate'
+      || snapshot.key !== modalState.queryKey
+      || activeShape !== modalState.shape
+      || snapshot.filters.appliedCellSizeMeters !== modalState.cellSizeMeters
+    ) {
+      closeAggregateCellModal();
+      return;
+    }
+
+    void loadAggregateCellPoints({
+      modalState,
+      snapshot
+    });
   });
 
   $effect(() => {
@@ -3145,7 +3505,11 @@
         </article>
       {/if}
 
-        <div class="map-stage">
+        <div
+          bind:this={mapStageElement}
+          class="map-stage"
+          style:--map-popup-max-height={`${popupMaxHeightPx}px`}
+        >
         <LeafletMap
           aggregateStat={activeAggregateStat}
           aggregates={aggregates}
@@ -3155,6 +3519,11 @@
           metricLabels={popupLabelsRecord}
           metricValueTypes={fieldValueTypesRecord}
           mode={activeMode}
+          on:openaggregatecellpoints={(event) => {
+            openAggregateCellModal({
+              cell: event.detail
+            });
+          }}
           on:selectpoint={(event) => {
             selectedPoint = event.detail;
           }}
@@ -3164,6 +3533,19 @@
           shape={activeShape}
           tileUrlTemplate={activeBasemap?.tileUrlTemplate ?? ''}
         />
+
+        {#if aggregateCellModalState}
+          <MapAggregatePointsModal
+            columns={aggregateCellModalColumns}
+            errorMessage={aggregateCellModalErrorMessage}
+            loading={aggregateCellModalLoading}
+            maxHeightPx={popupMaxHeightPx}
+            on:close={closeAggregateCellModal}
+            pointCount={aggregateCellModalDisplayCell?.pointCount ?? aggregateCellModalPoints.length}
+            rows={aggregateCellModalRows}
+            subtitle={aggregateCellModalSubtitle}
+          />
+        {/if}
 
         <div class="map-overlay map-overlay-basemap">
           <section class="panel map-overlay-card map-overlay-basemap-card">

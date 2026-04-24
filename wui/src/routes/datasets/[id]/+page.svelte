@@ -105,7 +105,6 @@
       datalogs: Array<{
         id: string;
         name: string | null;
-        displayName: string;
       }>;
     }>();
 
@@ -119,7 +118,6 @@
           datalogs: Array<{
             id: string;
             name: string | null;
-            displayName: string;
           }>;
         } = byPropKey.get(field.propKey) ?? {
           propKey: field.propKey,
@@ -132,8 +130,7 @@
         current.displayNames.add(field.displayName);
         current.datalogs.push({
           id: datalog.id,
-          name: datalog.datalogName ?? null,
-          displayName: field.displayName
+          name: datalog.datalogName ?? null
         });
         byPropKey.set(field.propKey, current);
       }
@@ -562,20 +559,24 @@
             </summary>
 
             <div class="field-inventory-accordion-body">
-              <details class="field-inventory-datalog-accordion">
+              <details class="field-inventory-source-accordion">
                 <summary>
-                  <span>{t('radtrack-common_tracks-label')}</span>
+                  <span class="field-inventory-line">
+                    <span>{t('radtrack-common_tracks-label')}:</span>
+                    <span>{field.datalogs.length}</span>
+                  </span>
                   <span class="exclude-editor-summary">
-                    <span class="chip subtle">{field.datalogs.length}</span>
                     <span aria-hidden="true" class="exclude-editor-icon"></span>
                   </span>
                 </summary>
 
-                <div class="field-inventory-datalog-list">
+                <div class="field-inventory-source-list">
                   {#each field.datalogs as datalog}
-                    <div class="field-inventory-datalog">
-                      <a href={`/datalogs/${datalog.id}`}>{datalog.name ?? datalog.id}</a>
-                      <span class="muted">{datalog.displayName}</span>
+                    <div class="field-inventory-source-item">
+                      <span class="field-inventory-source-text">{dataset.name}: {datalog.name ?? datalog.id}</span>
+                      <a class="button-link field-inventory-source-link" href={`/datalogs/${datalog.id}`}>
+                        {t('radtrack-common_open-button')}
+                      </a>
                     </div>
                   {/each}
                 </div>
@@ -793,7 +794,7 @@
   .sharing-accordion,
   .exclude-editor-accordion,
   .field-inventory-accordion,
-  .field-inventory-datalog-accordion {
+  .field-inventory-source-accordion {
     display: grid;
     gap: var(--space-4);
   }
@@ -801,7 +802,7 @@
   .sharing-accordion summary,
   .exclude-editor-accordion summary,
   .field-inventory-accordion summary,
-  .field-inventory-datalog-accordion summary {
+  .field-inventory-source-accordion summary {
     list-style: none;
     display: flex;
     align-items: center;
@@ -817,14 +818,14 @@
   .sharing-accordion summary::-webkit-details-marker,
   .exclude-editor-accordion summary::-webkit-details-marker,
   .field-inventory-accordion summary::-webkit-details-marker,
-  .field-inventory-datalog-accordion summary::-webkit-details-marker {
+  .field-inventory-source-accordion summary::-webkit-details-marker {
     display: none;
   }
 
   .sharing-accordion[open] summary,
   .exclude-editor-accordion[open] summary,
   .field-inventory-accordion[open] summary,
-  .field-inventory-datalog-accordion[open] summary {
+  .field-inventory-source-accordion[open] summary {
     margin-bottom: var(--space-3);
   }
 
@@ -840,7 +841,7 @@
   }
 
   .field-inventory-summary span,
-  .field-inventory-datalog {
+  .field-inventory-source-text {
     overflow-wrap: anywhere;
   }
 
@@ -849,18 +850,52 @@
     gap: var(--space-3);
   }
 
-  .field-inventory-datalog-list {
-    display: grid;
+  .field-inventory-line {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    align-items: baseline;
+    overflow-wrap: anywhere;
+  }
+
+  .field-inventory-source-accordion {
     gap: var(--space-3);
   }
 
-  .field-inventory-datalog {
+  .field-inventory-source-accordion[open] summary {
+    margin-bottom: 0;
+  }
+
+  .field-inventory-source-list {
     display: grid;
-    gap: 0.25rem;
-    padding: var(--space-3);
-    border: 1px solid var(--color-border);
+    gap: var(--space-2);
+    padding: 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--color-start) 30%, var(--color-border));
     border-radius: var(--radius-md);
-    background: var(--color-panel-strong);
+    background: color-mix(in srgb, var(--color-start-soft) 56%, var(--color-panel));
+  }
+
+  .field-inventory-source-item {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--space-3);
+    padding: 0.65rem 0.8rem;
+    border: 1px solid color-mix(in srgb, var(--color-mid) 24%, var(--color-border));
+    border-radius: var(--radius-md);
+    background: color-mix(in srgb, var(--color-mid-soft) 24%, var(--color-panel-strong));
+    overflow-wrap: anywhere;
+  }
+
+  .field-inventory-source-text {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .field-inventory-source-link {
+    min-height: 2.1rem;
+    padding: 0.45rem 0.7rem;
+    white-space: nowrap;
   }
 
   .sharing-controls {
@@ -883,7 +918,7 @@
 
   .exclude-editor-accordion[open] .exclude-editor-icon::before,
   .field-inventory-accordion[open] .exclude-editor-icon::before,
-  .field-inventory-datalog-accordion[open] .exclude-editor-icon::before {
+  .field-inventory-source-accordion[open] .exclude-editor-icon::before {
     transform: rotate(90deg);
     color: var(--color-text);
   }
@@ -920,6 +955,10 @@
   @media (max-width: 1024px) {
     .sharing-controls,
     .exclude-editor-layout {
+      grid-template-columns: 1fr;
+    }
+
+    .field-inventory-source-item {
       grid-template-columns: 1fr;
     }
 

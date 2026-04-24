@@ -1181,6 +1181,21 @@ const main = async () => {
     });
   }));
 
+  app.get('/api/map/aggregate-cell-points', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        result: await queryService.getAggregateCellPoints({
+          user: auth.user,
+          input: req.query,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
   app.post('/api/export', asyncHandler(async (req, res) => {
     const auth = requireMutationAuth({
       req,

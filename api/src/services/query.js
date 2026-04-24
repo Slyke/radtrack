@@ -260,6 +260,7 @@ const toResultFilter = ({ filter }) => ({
   maxLat: filter.maxLat,
   minLon: filter.minLon,
   maxLon: filter.maxLon,
+  requireCoordinates: filter.requireCoordinates,
   includeHidden: filter.includeHidden,
   applyExcludeAreas: filter.applyExcludeAreas,
   shape: filter.shape,
@@ -289,6 +290,7 @@ const normalizeFilterInput = ({ input }) => ({
   maxLat: coerceNumber({ value: input?.maxLat }),
   minLon: coerceNumber({ value: input?.minLon }),
   maxLon: coerceNumber({ value: input?.maxLon }),
+  requireCoordinates: coerceBoolean({ value: input?.requireCoordinates }),
   includeHidden: coerceBoolean({ value: input?.includeHidden }),
   applyExcludeAreas: coerceBoolean({ value: input?.applyExcludeAreas }),
   limit: coerceNumber({ value: input?.limit }),
@@ -709,6 +711,38 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
     ttlSecondsRemaining
   });
 
+  const mapRowToRawPoint = ({ row }) => ({
+    id: row.id,
+    datasetId: row.dataset_id,
+    datalogId: row.datalog_id,
+    sourceType: row.source_type,
+    datalogName: row.datalog_name,
+    rawTimestamp: row.raw_timestamp,
+    parsedTimeText: row.parsed_time_text,
+    occurredAt: row.occurred_at,
+    receivedAt: row.received_at,
+    latitude: row.latitude,
+    longitude: row.longitude,
+    accuracy: row.accuracy,
+    altitudeMeters: row.altitude_meters,
+    deviceId: row.device_id,
+    deviceName: row.device_name,
+    deviceType: row.device_type,
+    deviceCalibration: row.device_calibration,
+    firmwareVersion: row.firmware_version,
+    sourceReadingId: row.source_reading_id,
+    comment: row.comment,
+    custom: row.custom_text,
+    rowNumber: row.row_number,
+    warningFlags: row.warning_flags_json,
+    measurements: row.measurements_json ?? {},
+    components: buildStoredComponents({
+      source: row,
+      extraJson: row.extra_json
+    }),
+    extra: stripStoredComponentsFromExtra({ extraJson: row.extra_json })
+  });
+
   const buildRawPointResponse = ({
     datasetIds,
     filter,
@@ -719,37 +753,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
     metric: filter.metric,
     totalCount: rows.length,
     capped: rows.length > limit,
-    points: rows.slice(0, limit).map((row) => ({
-      id: row.id,
-      datasetId: row.dataset_id,
-      datalogId: row.datalog_id,
-      sourceType: row.source_type,
-      datalogName: row.datalog_name,
-      rawTimestamp: row.raw_timestamp,
-      parsedTimeText: row.parsed_time_text,
-      occurredAt: row.occurred_at,
-      receivedAt: row.received_at,
-      latitude: row.latitude,
-      longitude: row.longitude,
-      accuracy: row.accuracy,
-      altitudeMeters: row.altitude_meters,
-      deviceId: row.device_id,
-      deviceName: row.device_name,
-      deviceType: row.device_type,
-      deviceCalibration: row.device_calibration,
-      firmwareVersion: row.firmware_version,
-      sourceReadingId: row.source_reading_id,
-      comment: row.comment,
-      custom: row.custom_text,
-      rowNumber: row.row_number,
-      warningFlags: row.warning_flags_json,
-      measurements: row.measurements_json ?? {},
-      components: buildStoredComponents({
-        source: row,
-        extraJson: row.extra_json
-      }),
-      extra: stripStoredComponentsFromExtra({ extraJson: row.extra_json })
-    }))
+    points: rows.slice(0, limit).map((row) => mapRowToRawPoint({ row }))
   });
 
   const resolveAggregateCellWithCacheInfo = async ({
@@ -1012,6 +1016,11 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
 
     if (!filter.includeHidden) {
       where.push('r.is_hidden = FALSE');
+    }
+
+    if (filter.requireCoordinates) {
+      where.push('r.latitude IS NOT NULL');
+      where.push('r.longitude IS NOT NULL');
     }
 
     if (filter.dateFrom) {
@@ -1299,6 +1308,72 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
         source: 'computed',
         ttlSecondsRemaining
       })
+    };
+  };
+
+  const getAggregateCellPoints = async ({ user, input, correlationId = null }) => {
+    const normalizedInput = normalizeFilterInput({ input });
+    const cellId = typeof input?.cellId === 'string'
+      ? input.cellId.trim()
+      : '';
+
+    if (!cellId) {
+      throw createAppError({
+        caller: 'query::getAggregateCellPoints',
+        reason: 'Aggregate cell points require a cell id.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    const cellSizeMeters = normalizedInput.cellSizeMeters;
+    if (!Number.isFinite(cellSizeMeters) || cellSizeMeters <= 0) {
+      throw createAppError({
+        caller: 'query::getAggregateCellPoints',
+        reason: 'Aggregate cell points require a positive cell size.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    const rowResult = await fetchFilteredRows({
+      user,
+      input: {
+        ...input,
+        minLat: null,
+        maxLat: null,
+        minLon: null,
+        maxLon: null
+      },
+      correlationId,
+      includeViewport: false
+    });
+
+    const points = rowResult.rows
+      .filter((row) => (
+        typeof row.latitude === 'number'
+        && typeof row.longitude === 'number'
+        && buildAggregateCell({
+          point: {
+            latitude: row.latitude,
+            longitude: row.longitude
+          },
+          shape: normalizedInput.shape,
+          cellSizeMeters
+        }).id === cellId
+      ))
+      .map((row) => mapRowToRawPoint({ row }));
+
+    return {
+      datasetIds: rowResult.datasetIds,
+      metric: rowResult.filter.metric,
+      shape: normalizedInput.shape,
+      cellId,
+      cellSizeMeters,
+      totalCount: points.length,
+      points
     };
   };
 
@@ -1693,6 +1768,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
   return {
     fetchFilteredRows,
     getRawPoints,
+    getAggregateCellPoints,
     getAggregates,
     invalidateDatasets,
     invalidateAggregateCellsForPoint
