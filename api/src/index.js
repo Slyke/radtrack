@@ -1229,6 +1229,37 @@ const main = async () => {
     });
   }));
 
+  app.get('/api/map/point-count', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        result: await queryService.getPointCount({
+          user: auth.user,
+          input: req.query,
+          correlationId: req.correlationId,
+          includeViewport: false
+        })
+      }
+    });
+  }));
+
+  app.get('/api/map/time-slice-source', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        result: await queryService.getTimeSliceSource({
+          user: auth.user,
+          input: req.query,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
   app.get('/api/map/aggregates', asyncHandler(async (req, res) => {
     const auth = requireAuth({ req, correlationId: req.correlationId });
     const liveUpdateSnapshot = liveUpdateService?.getSnapshot() ?? {
@@ -1261,6 +1292,21 @@ const main = async () => {
           user: auth.user,
           input: req.query,
           sinceCursor: req.query.sinceCursor,
+          correlationId: req.correlationId
+        })
+      }
+    });
+  }));
+
+  app.get('/api/map/time-bounds', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        result: await queryService.getTimeBounds({
+          user: auth.user,
+          input: req.query,
           correlationId: req.correlationId
         })
       }

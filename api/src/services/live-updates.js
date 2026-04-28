@@ -13,6 +13,25 @@ const normalizeCursor = ({ value }) => {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
 };
 
+const normalizeBoolean = ({ value }) => {
+  if (typeof value === 'boolean') {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes', 'on'].includes(value.toLowerCase());
+  }
+
+  return Boolean(value);
+};
+
+const normalizePointLimit = ({ value }) => {
+  const parsed = Number.parseInt(String(value ?? ''), 10);
+  return Number.isInteger(parsed) && parsed > 0
+    ? Math.min(parsed, maxHistoryEntries)
+    : 500;
+};
+
 const normalizePointValue = ({ value }) => (Number.isFinite(Number(value)) ? Number(value) : null);
 
 const buildPointEvent = ({
@@ -43,6 +62,7 @@ const createStatusPayload = ({
   currentCursor,
   currentPublishedAt,
   latestMatch = null,
+  points = null,
   updateCount
 }) => ({
   hasUpdates: Boolean(latestMatch),
@@ -50,7 +70,8 @@ const createStatusPayload = ({
   latestCursor: latestMatch?.cursor ?? currentCursor,
   latestPublishedAt: latestMatch?.publishedAt ?? currentPublishedAt,
   currentCursor,
-  currentPublishedAt
+  currentPublishedAt,
+  ...(points ? { points } : {})
 });
 
 const sendSocketJson = ({ socket, body }) => {
@@ -94,7 +115,9 @@ export const createLiveUpdateService = ({
   });
 
   const getMatchingStatus = ({
+    includePoints = false,
     matcher,
+    pointLimit = 500,
     sinceCursor
   }) => {
     const snapshot = getSnapshot();
@@ -102,6 +125,7 @@ export const createLiveUpdateService = ({
       return createStatusPayload({
         currentCursor: snapshot.currentCursor,
         currentPublishedAt: snapshot.currentPublishedAt,
+        points: includePoints ? [] : null,
         latestMatch: null,
         updateCount: 0
       });
@@ -116,6 +140,13 @@ export const createLiveUpdateService = ({
       currentCursor: snapshot.currentCursor,
       currentPublishedAt: snapshot.currentPublishedAt,
       latestMatch: matchingEntries[matchingEntries.length - 1] ?? null,
+      points: includePoints
+        ? matchingEntries.slice(-pointLimit).map((entry) => ({
+            cursor: entry.cursor,
+            publishedAt: entry.publishedAt,
+            ...entry.point
+          }))
+        : null,
       updateCount: matchingEntries.length
     });
   };
@@ -168,6 +199,7 @@ export const createLiveUpdateService = ({
       });
 
       const status = getMatchingStatus({
+        includePoints: false,
         matcher,
         sinceCursor: effectiveSinceCursor
       });
@@ -345,13 +377,17 @@ export const createLiveUpdateService = ({
     sinceCursor,
     correlationId = null
   }) => {
+    const includePoints = normalizeBoolean({ value: input?.includePoints });
+    const pointLimit = normalizePointLimit({ value: input?.pointLimit });
     const matcher = await queryService.createLiveUpdateMatcher({
       user,
       input,
       correlationId
     });
     return getMatchingStatus({
+      includePoints,
       matcher,
+      pointLimit,
       sinceCursor: normalizeCursor({ value: sinceCursor })
     });
   };

@@ -91,6 +91,14 @@
     key: string;
   };
 
+  type LiveUpdateMarker = {
+    id: string;
+    latitude: number;
+    longitude: number;
+    occurredAt: string | null;
+    publishedAt: string;
+  };
+
   interface Props {
     points?: MapPoint[];
     aggregates?: AggregateCell[];
@@ -104,6 +112,7 @@
     tileUrlTemplate?: string;
     attribution?: string;
     focus?: MapFocus | null;
+    liveUpdateMarkers?: LiveUpdateMarker[];
   }
 
   let {
@@ -120,7 +129,8 @@
     metricValueTypes = {},
     tileUrlTemplate = '',
     attribution = '',
-    focus = null
+    focus = null,
+    liveUpdateMarkers = []
   }: Props = $props();
 
   const dispatch = createEventDispatcher<{
@@ -919,7 +929,8 @@
     currentAggregates: aggregates,
     currentMode: mode,
     currentShape: shape,
-    currentColorScale: colorScale
+    currentColorScale: colorScale,
+    currentLiveUpdateMarkers: liveUpdateMarkers
   });
 
   const maybeResetToPrimaryWorld = () => {
@@ -959,18 +970,80 @@
     });
   };
 
+  const buildLiveUpdatePopupHtml = ({ marker }: { marker: LiveUpdateMarker }) => `
+    <div class="map-popup">
+      ${buildPopupHeaderHtml({
+        title: t('radtrack-map_live_update_marker-title'),
+        subtitle: formatTimestamp(marker.occurredAt ?? marker.publishedAt)
+      })}
+      <div class="map-popup-data-list">
+        ${buildPopupDataRowHtml({
+          label: t('radtrack-common_latitude-label'),
+          value: formatNumber(marker.latitude)
+        })}
+        ${buildPopupDataRowHtml({
+          label: t('radtrack-common_longitude-label'),
+          value: formatNumber(marker.longitude)
+        })}
+      </div>
+    </div>
+  `;
+
+  const renderLiveUpdateMarkers = ({
+    markers,
+    popupOptions
+  }: {
+    markers: LiveUpdateMarker[];
+    popupOptions: {
+      autoPan: boolean;
+      closeButton: boolean;
+      maxWidth: number;
+      minWidth: number;
+    };
+  }) => {
+    if (!leaflet || !overlayLayer) {
+      return;
+    }
+
+    const longitudeOffsets = getVisibleLongitudeOffsets();
+    for (const marker of markers) {
+      if (!Number.isFinite(marker.latitude) || !Number.isFinite(marker.longitude)) {
+        continue;
+      }
+
+      for (const longitudeOffset of longitudeOffsets) {
+        const layer = leaflet.circleMarker([
+          marker.latitude,
+          marker.longitude + longitudeOffset
+        ], {
+          pane: overlayPane,
+          radius: 9,
+          color: '#ffffff',
+          weight: 2,
+          fillColor: '#ffbc3a',
+          fillOpacity: 0.95,
+          className: 'map-live-update-marker'
+        });
+        layer.bindPopup(buildLiveUpdatePopupHtml({ marker }), popupOptions);
+        overlayLayer.addLayer(layer);
+      }
+    }
+  };
+
   const render = ({
     currentPoints,
     currentAggregates,
     currentMode,
     currentShape,
-    currentColorScale
+    currentColorScale,
+    currentLiveUpdateMarkers
   }: {
     currentPoints: MapPoint[];
     currentAggregates: AggregateCell[];
     currentMode: 'raw' | 'aggregate';
     currentShape: 'hexagon' | 'square' | 'circle';
     currentColorScale: ColorScale | null;
+    currentLiveUpdateMarkers: LiveUpdateMarker[];
   }) => {
     if (!map || !leaflet || !overlayLayer) {
       return;
@@ -1027,6 +1100,10 @@
       if (popupToRestore && !restoreLayer) {
         activePopup = null;
       }
+      renderLiveUpdateMarkers({
+        markers: currentLiveUpdateMarkers,
+        popupOptions
+      });
       restoreLayer?.openPopup();
       return;
     }
@@ -1132,6 +1209,10 @@
     if (popupToRestore && !restoreLayer) {
       activePopup = null;
     }
+    renderLiveUpdateMarkers({
+      markers: currentLiveUpdateMarkers,
+      popupOptions
+    });
     restoreLayer?.openPopup();
   };
 
@@ -1214,6 +1295,7 @@
     const currentTileUrlTemplate = tileUrlTemplate;
     const currentAttribution = attribution;
     const currentColorScale = colorScale;
+    const currentLiveUpdateMarkers = liveUpdateMarkers;
     popupFields;
     aggregateStat;
 
@@ -1227,7 +1309,8 @@
       currentAggregates,
       currentMode,
       currentShape,
-      currentColorScale
+      currentColorScale,
+      currentLiveUpdateMarkers
     });
   });
 </script>
@@ -1246,6 +1329,10 @@
     background: var(--color-panel);
     border: 1px solid var(--color-border);
     box-shadow: none;
+  }
+
+  .map-container :global(.map-live-update-marker) {
+    filter: drop-shadow(0 0 0.45rem rgba(255, 188, 58, 0.85));
   }
 
   .map-container :global(.leaflet-popup-content) {

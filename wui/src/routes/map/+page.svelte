@@ -177,6 +177,7 @@
   type TimeFilterMode = 'none' | 'absolute' | 'relative';
   type TimeFilterPrecision = 'date' | 'datetime';
   type TimeFilterRelativeUnit = 'hours' | 'days';
+  type TimeSliceUnit = 'minutes' | 'hours' | 'days';
   type SidebarSize = 'small' | 'large';
   type UrlSelectionMode = 'explicit' | 'none' | 'all' | 'default';
 
@@ -243,6 +244,67 @@
     reason?: string;
   };
 
+  type LiveUpdatePointDetail = {
+    cursor: number;
+    publishedAt: string;
+    id: string;
+    datasetId: string;
+    datalogId: string;
+    occurredAt: string | null;
+    receivedAt: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    altitudeMeters: number | null;
+    accuracy: number | null;
+    measurements: Record<string, number>;
+  };
+
+  type LiveUpdateStatus = {
+    hasUpdates: boolean;
+    updateCount: number;
+    latestCursor?: number;
+    latestPublishedAt?: string;
+    currentCursor?: number;
+    currentPublishedAt?: string;
+    points?: LiveUpdatePointDetail[];
+  };
+
+  type LiveUpdateLogEntry = {
+    key: string;
+    cursor: number;
+    publishedAt: string;
+    point: LiveUpdatePointDetail;
+  };
+
+  type LiveUpdateMarker = {
+    id: string;
+    latitude: number;
+    longitude: number;
+    occurredAt: string | null;
+    publishedAt: string;
+  };
+
+  type TimeSliceSettings = {
+    amount: number;
+    unit: TimeSliceUnit;
+  };
+
+  type TimeSliceWindow = {
+    index: number;
+    startIso: string;
+    endIso: string;
+    startMs: number;
+    endMs: number;
+    isLast: boolean;
+  };
+
+  type PreparedTimeSliceWindow = TimeSliceWindow & {
+    currentStartIndex: number;
+    currentEndIndex: number;
+    cumulativeStartIndex: number;
+    cumulativeEndIndex: number;
+  };
+
   const autoUpdateDebounceMs = 450;
   const autoUpdateStorageKeyPrefix = 'radtrack.map.auto-update';
   const autoCellSizeStorageKeyPrefix = 'radtrack.map.auto-cell-size';
@@ -250,12 +312,23 @@
   const filterUrlParamName = 'filters';
   const liveUpdatesReconnectDelayMs = 5000;
   const liveUpdatesStorageKeyPrefix = 'radtrack.map.live-updates';
+  const liveUpdateMarkerSweepMs = 5000;
+  const liveUpdateMarkerMinimumVisibleMs = 5000;
+  const liveUpdatePointLimit = 500;
+  const maxLiveUpdateLogEntries = 100;
   const mapLatUrlParamName = 'lat';
   const mapLonUrlParamName = 'lon';
   const mapZoomUrlParamName = 'z';
   const sidebarSizeStorageKeyPrefix = 'radtrack.map.sidebar-size';
+  const timeSliceAmountUrlParamName = 'sliceAmount';
+  const timeSliceLargePointWarningThreshold = 100000;
+  const timeSlicePlaybackBaseMs = 1000;
+  const timeSlicePlaybackSpeeds = [1, 2, 5, 10];
+  const timeSliceUnitUrlParamName = 'sliceUnit';
   const userLocationZoom = 11;
   const firstDataPointZoom = 13;
+  const projectedEarthRadiusMeters = 6378137;
+  const projectedMaxLatitude = 85.05112878;
   const sidebarSizeOptions: {
     key: SidebarSize;
     width: string;
@@ -343,6 +416,28 @@
     zoom: source.zoom
   });
 
+  const pointIsInsideViewport = ({
+    point,
+    sourceViewport
+  }: {
+    point: MapPoint;
+    sourceViewport: MapViewport;
+  }) => {
+    if (point.latitude < sourceViewport.minLat || point.latitude > sourceViewport.maxLat) {
+      return false;
+    }
+
+    if ((sourceViewport.maxLon - sourceViewport.minLon) >= 360) {
+      return true;
+    }
+
+    if (sourceViewport.minLon <= sourceViewport.maxLon) {
+      return point.longitude >= sourceViewport.minLon && point.longitude <= sourceViewport.maxLon;
+    }
+
+    return point.longitude >= sourceViewport.minLon || point.longitude <= sourceViewport.maxLon;
+  };
+
   const cloneFilters = (
     source: MapFilters | AppliedMapFilters,
     { clearOneShotControls = false }: { clearOneShotControls?: boolean } = {}
@@ -413,6 +508,193 @@
   const formatLocalDateTimeInputValue = ({ value }: { value: Date }) => (
     `${formatLocalDateInputValue({ value })}T${padDatePart(value.getHours())}:${padDatePart(value.getMinutes())}`
   );
+
+  const createDefaultTimeSliceSettings = (): TimeSliceSettings => ({
+    amount: 1,
+    unit: 'days'
+  });
+
+  const normalizeTimeSliceSettings = ({ settings }: { settings: TimeSliceSettings }) => {
+    const amount = Math.max(1, Math.trunc(toFiniteNumber(settings.amount) ?? 1));
+    return {
+      amount,
+      unit: ['minutes', 'hours', 'days'].includes(settings.unit)
+        ? settings.unit
+        : 'days'
+    } as TimeSliceSettings;
+  };
+
+  const getTimeSliceUnitMillis = ({ unit }: { unit: TimeSliceUnit }) => {
+    switch (unit) {
+      case 'minutes':
+        return 60 * 1000;
+      case 'days':
+        return 24 * 60 * 60 * 1000;
+      case 'hours':
+      default:
+        return 60 * 60 * 1000;
+    }
+  };
+
+  const getTimeSliceIntervalMs = ({ settings }: { settings: TimeSliceSettings }) => {
+    const normalized = normalizeTimeSliceSettings({ settings });
+    return normalized.amount * getTimeSliceUnitMillis({ unit: normalized.unit });
+  };
+
+  const getTimeSliceUnitLabelKey = ({
+    amount,
+    unit
+  }: {
+    amount: number;
+    unit: TimeSliceUnit;
+  }) => {
+    if (unit === 'minutes') {
+      return amount === 1
+        ? 'radtrack-map_time_slice_minute-label'
+        : 'radtrack-map_time_slice_minutes-label';
+    }
+
+    if (unit === 'days') {
+      return amount === 1
+        ? 'radtrack-map_time_filter_day-label'
+        : 'radtrack-map_time_filter_days-label';
+    }
+
+    return amount === 1
+      ? 'radtrack-map_time_filter_hour-label'
+      : 'radtrack-map_time_filter_hours-label';
+  };
+
+  const toRadians = (value: number) => (value * Math.PI) / 180;
+  const toDegrees = (value: number) => (value * 180) / Math.PI;
+  const clampProjectedLatitude = ({ latitude }: { latitude: number }) => Math.max(
+    -projectedMaxLatitude,
+    Math.min(projectedMaxLatitude, latitude)
+  );
+  const toProjectedMeters = ({
+    latitude,
+    longitude
+  }: {
+    latitude: number;
+    longitude: number;
+  }) => ({
+    x: projectedEarthRadiusMeters * toRadians(longitude),
+    y: projectedEarthRadiusMeters * Math.log(
+      Math.tan((Math.PI / 4) + (toRadians(clampProjectedLatitude({ latitude })) / 2))
+    )
+  });
+  const fromProjectedMeters = ({
+    x,
+    y
+  }: {
+    x: number;
+    y: number;
+  }) => ({
+    latitude: toDegrees((2 * Math.atan(Math.exp(y / projectedEarthRadiusMeters))) - (Math.PI / 2)),
+    longitude: toDegrees(x / projectedEarthRadiusMeters)
+  });
+
+  const buildFrontendAggregateCell = ({
+    cellSizeMeters,
+    point,
+    shape
+  }: {
+    cellSizeMeters: number;
+    point: { latitude: number; longitude: number };
+    shape: AppliedMapFilters['shape'];
+  }) => {
+    const meters = toProjectedMeters(point);
+
+    if (shape === 'hexagon') {
+      const size = cellSizeMeters;
+      const q = ((Math.sqrt(3) / 3) * meters.x - (1 / 3) * meters.y) / size;
+      const r = ((2 / 3) * meters.y) / size;
+      const s = -q - r;
+      let roundedQ = Math.round(q);
+      let roundedR = Math.round(r);
+      let roundedS = Math.round(s);
+
+      const qDiff = Math.abs(roundedQ - q);
+      const rDiff = Math.abs(roundedR - r);
+      const sDiff = Math.abs(roundedS - s);
+
+      if (qDiff > rDiff && qDiff > sDiff) {
+        roundedQ = -roundedR - roundedS;
+      } else if (rDiff > sDiff) {
+        roundedR = -roundedQ - roundedS;
+      } else {
+        roundedS = -roundedQ - roundedR;
+      }
+
+      return {
+        id: `hex:${roundedQ}:${roundedR}`,
+        center: fromProjectedMeters({
+          x: size * Math.sqrt(3) * (roundedQ + (roundedR / 2)),
+          y: size * 1.5 * roundedR
+        }),
+        radiusMeters: size
+      };
+    }
+
+    const step = cellSizeMeters;
+    const cellX = Math.round(meters.x / step);
+    const cellY = Math.round(meters.y / step);
+    return {
+      id: `${shape}:${cellX}:${cellY}`,
+      center: fromProjectedMeters({
+        x: cellX * step,
+        y: cellY * step
+      }),
+      radiusMeters: shape === 'circle' ? cellSizeMeters / 2 : cellSizeMeters
+    };
+  };
+
+  const computeFrontendAggregateStats = ({
+    values
+  }: {
+    values: number[];
+  }): AggregateStats => {
+    if (!values.length) {
+      return {
+        min: null,
+        max: null,
+        mean: null,
+        median: null,
+        mode: null,
+        count: 0
+      };
+    }
+
+    const sorted = [...values].sort((left, right) => left - right);
+    const modeBucketDecimals = Math.max(0, Math.trunc(toFiniteNumber($sessionStore.ui?.modeBucketDecimals) ?? 2));
+    const bucketScale = 10 ** modeBucketDecimals;
+    const modeCounts = new Map<number, number>();
+    for (const value of sorted) {
+      const bucket = Math.round(value * bucketScale) / bucketScale;
+      modeCounts.set(bucket, (modeCounts.get(bucket) ?? 0) + 1);
+    }
+
+    let mode: number | null = null;
+    let modeCount = -1;
+    for (const [bucket, count] of modeCounts.entries()) {
+      if (count > modeCount) {
+        mode = bucket;
+        modeCount = count;
+      }
+    }
+
+    const midpoint = Math.floor(sorted.length / 2);
+    return {
+      min: sorted[0],
+      max: sorted[sorted.length - 1],
+      mean: sorted.reduce((total, value) => total + value, 0) / sorted.length,
+      median: sorted.length % 2 === 0
+        ? (sorted[midpoint - 1] + sorted[midpoint]) / 2
+        : sorted[midpoint],
+      mode,
+      count: sorted.length
+    };
+  };
 
   const getDatePortion = ({ value }: { value: string }) => {
     const trimmedValue = String(value ?? '').trim();
@@ -499,6 +781,188 @@
       dateTo,
       endLocalDate: getDatePortion({ value: sourceFilters.timeFilterEnd })
     };
+  };
+
+  const resolveAbsoluteTimeWindowMillis = ({
+    sourceFilters
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+  }) => {
+    const resolved = resolveAbsoluteTimeWindow({ sourceFilters });
+    if (!resolved) {
+      return null;
+    }
+
+    const startMs = Date.parse(resolved.dateFrom);
+    const endMs = Date.parse(resolved.dateTo);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+      return null;
+    }
+
+    return {
+      ...resolved,
+      startMs,
+      endMs
+    };
+  };
+
+  const buildTimeSliceWindows = ({
+    sourceFilters,
+    settings
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+    settings: TimeSliceSettings;
+  }): TimeSliceWindow[] => {
+    const range = resolveAbsoluteTimeWindowMillis({ sourceFilters });
+    if (!range) {
+      return [];
+    }
+
+    const intervalMs = getTimeSliceIntervalMs({ settings });
+    if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+      return [];
+    }
+
+    const windows: TimeSliceWindow[] = [];
+    for (
+      let startMs = range.startMs, index = 0;
+      startMs <= range.endMs && index < 10000;
+      startMs += intervalMs, index += 1
+    ) {
+      const endMs = Math.min(startMs + intervalMs, range.endMs);
+      windows.push({
+        index,
+        startIso: new Date(startMs).toISOString(),
+        endIso: new Date(endMs).toISOString(),
+        startMs,
+        endMs,
+        isLast: endMs >= range.endMs
+      });
+
+      if (endMs >= range.endMs) {
+        break;
+      }
+    }
+
+    return windows;
+  };
+
+  const getPointTimestampMs = ({ point }: { point: MapPoint | LiveUpdatePointDetail }) => {
+    const timestamp = point.occurredAt ?? point.receivedAt;
+    if (!timestamp) {
+      return null;
+    }
+
+    const parsed = Date.parse(timestamp);
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+
+  const normalizePlaybackPoint = ({ point }: { point: MapPoint }): MapPoint | null => {
+    const latitude = toFiniteNumber(point.latitude);
+    const longitude = toFiniteNumber(point.longitude);
+    if (latitude === null || longitude === null) {
+      return null;
+    }
+
+    return {
+      ...point,
+      latitude,
+      longitude,
+      altitudeMeters: toFiniteNumber(point.altitudeMeters),
+      accuracy: toFiniteNumber(point.accuracy),
+      measurements: Object.fromEntries(
+        Object.entries(point.measurements ?? {}).flatMap(([key, value]) => {
+          const numericValue = toFiniteNumber(value);
+          return numericValue === null ? [] : [[key, numericValue]];
+        })
+      )
+    };
+  };
+
+  const normalizePreparedTimeSliceWindow = ({ value }: { value: unknown }): PreparedTimeSliceWindow | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const index = toFiniteNumber(record.index);
+    const startMs = toFiniteNumber(record.startMs);
+    const endMs = toFiniteNumber(record.endMs);
+    const currentStartIndex = toFiniteNumber(record.currentStartIndex);
+    const currentEndIndex = toFiniteNumber(record.currentEndIndex);
+    const cumulativeStartIndex = toFiniteNumber(record.cumulativeStartIndex);
+    const cumulativeEndIndex = toFiniteNumber(record.cumulativeEndIndex);
+    if (
+      index === null
+      || startMs === null
+      || endMs === null
+      || currentStartIndex === null
+      || currentEndIndex === null
+      || cumulativeStartIndex === null
+      || cumulativeEndIndex === null
+      || typeof record.startIso !== 'string'
+      || typeof record.endIso !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      index: Math.max(0, Math.trunc(index)),
+      startIso: record.startIso,
+      endIso: record.endIso,
+      startMs,
+      endMs,
+      isLast: record.isLast === true,
+      currentStartIndex: Math.max(0, Math.trunc(currentStartIndex)),
+      currentEndIndex: Math.max(0, Math.trunc(currentEndIndex)),
+      cumulativeStartIndex: Math.max(0, Math.trunc(cumulativeStartIndex)),
+      cumulativeEndIndex: Math.max(0, Math.trunc(cumulativeEndIndex))
+    };
+  };
+
+  const getPreparedTimeSlicePointRange = ({
+    currentOnly,
+    pointCount,
+    window
+  }: {
+    currentOnly: boolean;
+    pointCount: number;
+    window: PreparedTimeSliceWindow;
+  }) => {
+    const rawStart = currentOnly ? window.currentStartIndex : window.cumulativeStartIndex;
+    const rawEnd = currentOnly ? window.currentEndIndex : window.cumulativeEndIndex;
+    const start = Math.max(0, Math.min(pointCount, rawStart));
+    const end = Math.max(start, Math.min(pointCount, rawEnd));
+
+    return { start, end };
+  };
+
+  const getPreparedTimeSlicePointsInViewport = ({
+    currentOnly,
+    points: sourcePoints,
+    sourceViewport,
+    window
+  }: {
+    currentOnly: boolean;
+    points: MapPoint[];
+    sourceViewport: MapViewport;
+    window: PreparedTimeSliceWindow;
+  }) => {
+    const range = getPreparedTimeSlicePointRange({
+      currentOnly,
+      pointCount: sourcePoints.length,
+      window
+    });
+    const visiblePoints: MapPoint[] = [];
+
+    for (let index = range.start; index < range.end; index += 1) {
+      const point = sourcePoints[index];
+      if (point && pointIsInsideViewport({ point, sourceViewport })) {
+        visiblePoints.push(point);
+      }
+    }
+
+    return visiblePoints;
   };
 
   const getTimeFilterValidationKey = ({
@@ -645,6 +1109,20 @@
     })
   });
 
+  const createPlaybackAppliedFilters = ({
+    filters: sourceFilters,
+    viewport: sourceViewport
+  }: {
+    filters: AppliedMapFilters;
+    viewport: MapViewport;
+  }): AppliedMapFilters => ({
+    ...sourceFilters,
+    appliedCellSizeMeters: getAppliedCellSizeMeters({
+      filters: sourceFilters,
+      viewport: sourceViewport
+    })
+  });
+
   const serializeFilters = ({
     filters: sourceFilters
   }: {
@@ -700,6 +1178,38 @@
     maxLon: sourceViewport.maxLon,
     zoom: sourceViewport.zoom
   });
+
+  const serializeTimeSlicePointSourceQuery = ({
+    filters: sourceFilters
+  }: {
+    filters: AppliedMapFilters;
+  }) => JSON.stringify({
+    datasetIds: sourceFilters.datasetIds,
+    combinedDatasetIds: sourceFilters.combinedDatasetIds,
+    trackIds: sourceFilters.trackIds,
+    trackSelectionMode: sourceFilters.trackSelectionMode,
+    applyExcludeAreas: sourceFilters.applyExcludeAreas,
+    timeFilterMode: sourceFilters.timeFilterMode,
+    timeFilterPrecision: sourceFilters.timeFilterPrecision,
+    timeFilterStart: sourceFilters.timeFilterStart,
+    timeFilterEnd: sourceFilters.timeFilterEnd
+  });
+
+  const serializeTimeSliceSourceQuery = ({
+    filters: sourceFilters,
+    settings
+  }: {
+    filters: AppliedMapFilters;
+    settings: TimeSliceSettings;
+  }) => {
+    const normalized = normalizeTimeSliceSettings({ settings });
+
+    return JSON.stringify({
+      pointSource: JSON.parse(serializeTimeSlicePointSourceQuery({ filters: sourceFilters })),
+      sliceAmount: normalized.amount,
+      sliceUnit: normalized.unit
+    });
+  };
 
   const createQuerySnapshot = ({
     filters: sourceFilters,
@@ -820,6 +1330,9 @@
   let liveUpdateCursor = $state<number | null>(null);
   let liveUpdatePendingCursor = $state<number | null>(null);
   let liveUpdateTransport = $state<'idle' | 'polling' | 'websocket'>('idle');
+  let liveUpdateLog = $state<LiveUpdateLogEntry[]>([]);
+  let liveUpdateMarkers = $state<LiveUpdateMarker[]>([]);
+  let liveUpdateMarkersSetAt = 0;
   let selectedPoint = $state<MapPoint | null>(null);
   let aggregateCellModalState = $state<AggregateCellModalState | null>(null);
   let aggregateCellModalPoints = $state<MapPoint[]>([]);
@@ -838,6 +1351,28 @@
   let appliedPopupState = $state<PopupStateSnapshot>(createInitialPopupStateSnapshot());
   let colorScaleSettings = $state(createInitialColorScaleSettings());
   let activeQuery = $state<MapQuerySnapshot | null>(null);
+  let timeSliceEnabled = $state(false);
+  let timeSliceCurrentOnly = $state(false);
+  let timeSliceSettings = $state<TimeSliceSettings>(createDefaultTimeSliceSettings());
+  let timeSliceDraftSettings = $state<TimeSliceSettings>(createDefaultTimeSliceSettings());
+  let timeSliceConfigOpen = $state(false);
+  let timeSliceIndex = $state(0);
+  let timeSlicePlaying = $state(false);
+  let timeSlicePlaybackSpeed = $state(1);
+  let timeSlicePlaybackStartedAt = 0;
+  let timeSlicePlaybackStartIndex = 0;
+  let timeSliceSourcePoints = $state<MapPoint[]>([]);
+  let timeSlicePreparedWindows = $state<PreparedTimeSliceWindow[]>([]);
+  let timeSliceSourceLoading = $state(false);
+  let loadedTimeSliceSourceKey = $state('');
+  let timeSliceSourceErrorKey = $state('');
+  let timeSlicePointCount = $state<number | null>(null);
+  let timeSlicePointCountLoading = $state(false);
+  let loadedTimeSlicePointCountKey = $state('');
+  let timeSlicePointCountErrorKey = $state('');
+  let timeSliceLargeLoadConfirmedKey = $state('');
+  let timeBoundsLoading = $state(false);
+  let rawPointTotalCount = $state(0);
   let mapFocus = $state<MapFocus | null>(null);
   let loadingTrackDatasetIds = $state<string[]>([]);
   let basemapKey = $state<BasemapKey>('default');
@@ -854,8 +1389,12 @@
   let liveUpdateSocketReady = false;
   let liveUpdateReconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let liveUpdateTimer: ReturnType<typeof setInterval> | null = null;
+  let liveUpdateMarkerTimer: ReturnType<typeof setInterval> | null = null;
+  let timeSlicePlaybackTimer: ReturnType<typeof setInterval> | null = null;
   let liveUpdateRefreshInFlight = false;
   let liveUpdateRefreshQueued = false;
+  let timeSlicePointCountRequestVersion = 0;
+  let timeSliceSourceRequestVersion = 0;
   let queuedSidebarSnapshot: {
     query: MapQuerySnapshot;
     popupState: PopupStateSnapshot;
@@ -1048,10 +1587,178 @@
     }
   };
 
+  const getPointMetricNumberValue = ({
+    metricKey,
+    point
+  }: {
+    metricKey: string;
+    point: MapPoint;
+  }) => {
+    switch (metricKey) {
+      case 'occurredAt': {
+        const timestampMs = getPointTimestampMs({ point });
+        return timestampMs === null ? null : timestampMs;
+      }
+      case 'latitude':
+        return point.latitude;
+      case 'longitude':
+        return point.longitude;
+      case 'altitudeMeters':
+        return point.altitudeMeters;
+      case 'accuracy':
+        return point.accuracy;
+      default: {
+        const value = point.measurements?.[metricKey];
+        return typeof value === 'number' && Number.isFinite(value) ? value : null;
+      }
+    }
+  };
+
+  const getAggregateCellForPoint = ({
+    point,
+    sourceFilters
+  }: {
+    point: MapPoint;
+    sourceFilters: AppliedMapFilters;
+  }) => {
+    if (!Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)) {
+      return null;
+    }
+
+    return buildFrontendAggregateCell({
+      cellSizeMeters: sourceFilters.appliedCellSizeMeters,
+      point: {
+        latitude: point.latitude,
+        longitude: point.longitude
+      },
+      shape: sourceFilters.shape
+    });
+  };
+
+  const buildAggregateCellsForPoints = ({
+    popupFieldsForCells,
+    sourceFilters,
+    sourcePoints
+  }: {
+    popupFieldsForCells: MetricField[];
+    sourceFilters: AppliedMapFilters;
+    sourcePoints: MapPoint[];
+  }): AggregateCell[] => {
+    const cellGroups = new Map<string, {
+      cell: ReturnType<typeof buildFrontendAggregateCell>;
+      points: MapPoint[];
+    }>();
+
+    for (const point of sourcePoints) {
+      const cell = getAggregateCellForPoint({
+        point,
+        sourceFilters
+      });
+      if (!cell) {
+        continue;
+      }
+
+      const current = cellGroups.get(cell.id) ?? {
+        cell,
+        points: []
+      };
+      current.points.push(point);
+      cellGroups.set(cell.id, current);
+    }
+
+    return [...cellGroups.values()].map(({ cell, points: cellPoints }) => {
+      let timeRangeStart: string | null = null;
+      let timeRangeEnd: string | null = null;
+      const selectedMetricValues: number[] = [];
+      const popupMetricValues = new Map<string, number[]>();
+      const popupDataValues = new Map<string, string[]>();
+
+      for (const point of cellPoints) {
+        const selectedMetricValue = getPointMetricNumberValue({
+          metricKey: sourceFilters.metric,
+          point
+        });
+        if (selectedMetricValue !== null) {
+          selectedMetricValues.push(selectedMetricValue);
+        }
+
+        const timestamp = point.occurredAt ?? point.receivedAt;
+        if (timestamp) {
+          if (!timeRangeStart || timestamp < timeRangeStart) {
+            timeRangeStart = timestamp;
+          }
+
+          if (!timeRangeEnd || timestamp > timeRangeEnd) {
+            timeRangeEnd = timestamp;
+          }
+        }
+
+        for (const field of popupFieldsForCells) {
+          if (field.propKey === aggregateDataCountPropKey || field.source === 'synthetic') {
+            continue;
+          }
+
+          const aggregateBasePropKey = getAggregateTimeBasePropKey(field.propKey);
+          const propKey = aggregateBasePropKey ?? field.propKey;
+          if (field.valueType === 'string' && !aggregateBasePropKey) {
+            const rawValue = getPointPopupFieldValue({
+              point,
+              propKey,
+              cell: null
+            });
+            if (rawValue === null || rawValue === undefined || rawValue === '') {
+              continue;
+            }
+
+            const values = popupDataValues.get(propKey) ?? [];
+            values.push(String(rawValue));
+            popupDataValues.set(propKey, values);
+            continue;
+          }
+
+          const numericValue = getPointMetricNumberValue({
+            metricKey: propKey,
+            point
+          });
+          if (numericValue === null) {
+            continue;
+          }
+
+          const values = popupMetricValues.get(propKey) ?? [];
+          values.push(numericValue);
+          popupMetricValues.set(propKey, values);
+        }
+      }
+
+      return {
+        id: cell.id,
+        center: cell.center,
+        radiusMeters: cell.radiusMeters,
+        pointCount: cellPoints.length,
+        timeRange: {
+          start: timeRangeStart,
+          end: timeRangeEnd
+        },
+        stats: computeFrontendAggregateStats({
+          values: selectedMetricValues
+        }),
+        metrics: Object.fromEntries([...popupMetricValues.entries()].map(([metricKey, values]) => [
+          metricKey,
+          computeFrontendAggregateStats({ values })
+        ])),
+        dataValues: Object.fromEntries([...popupDataValues.entries()].map(([propKey, values]) => [
+          propKey,
+          [...new Set(values)]
+        ]))
+      };
+    });
+  };
+
   const toUrlNumber = (value: string | null) => (
     value === null || !value.trim() ? null : toFiniteNumber(value)
   );
   const roundUrlCoordinate = ({ value }: { value: number }) => Number(value.toFixed(4));
+  const timeSliceUnitOptions: TimeSliceUnit[] = ['days', 'hours', 'minutes'];
 
   const availableBasemapKeys: BasemapKey[] = ['default', 'satellite', 'light', 'topo'];
   const availableSidebarSizes: SidebarSize[] = ['small', 'large'];
@@ -1263,6 +1970,28 @@
         return null;
       }
     }
+  };
+
+  const loadUrlTimeSliceSettings = (): TimeSliceSettings | null => {
+    if (!browser) {
+      return null;
+    }
+
+    const url = new URL(window.location.href);
+    const amount = toFiniteNumber(url.searchParams.get(timeSliceAmountUrlParamName));
+    const rawUnit = url.searchParams.get(timeSliceUnitUrlParamName);
+    if (amount === null && rawUnit === null) {
+      return null;
+    }
+
+    return normalizeTimeSliceSettings({
+      settings: {
+        amount: amount === null ? createDefaultTimeSliceSettings().amount : amount,
+        unit: timeSliceUnitOptions.includes(rawUnit as TimeSliceUnit)
+          ? rawUnit as TimeSliceUnit
+          : createDefaultTimeSliceSettings().unit
+      }
+    });
   };
 
   const loadUrlFilters = (): MapFilters | null => {
@@ -1488,6 +2217,8 @@
     filters: buildCompactUrlFilters({ nextFilters }),
     latitude: roundUrlCoordinate({ value: nextViewport.centerLat }),
     longitude: roundUrlCoordinate({ value: nextViewport.centerLon }),
+    sliceAmount: normalizeTimeSliceSettings({ settings: timeSliceSettings }).amount,
+    sliceUnit: normalizeTimeSliceSettings({ settings: timeSliceSettings }).unit,
     zoom: Math.round(nextViewport.zoom)
   });
 
@@ -1516,6 +2247,9 @@
     url.searchParams.set(mapLatUrlParamName, roundUrlCoordinate({ value: nextViewport.centerLat }).toFixed(4));
     url.searchParams.set(mapLonUrlParamName, roundUrlCoordinate({ value: nextViewport.centerLon }).toFixed(4));
     url.searchParams.set(mapZoomUrlParamName, String(Math.round(nextViewport.zoom)));
+    const normalizedTimeSliceSettings = normalizeTimeSliceSettings({ settings: timeSliceSettings });
+    url.searchParams.set(timeSliceAmountUrlParamName, String(normalizedTimeSliceSettings.amount));
+    url.searchParams.set(timeSliceUnitUrlParamName, normalizedTimeSliceSettings.unit);
     window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}${url.hash}`);
     lastUrlStateKey = nextUrlStateKey;
   };
@@ -1538,6 +2272,8 @@
         fallbackValue: true
       })
     };
+    timeSliceSettings = loadUrlTimeSliceSettings() ?? timeSliceSettings;
+    timeSliceDraftSettings = { ...timeSliceSettings };
 
     const storedBasemapKey = loadStoredString({
       prefix: basemapStorageKeyPrefix,
@@ -1978,39 +2714,147 @@
     stat: getAggregateStatLabel(activeAggregateStat)
   }));
   const activeAppliedCellSizeMeters = $derived(activeQuery?.filters.appliedCellSizeMeters ?? effectiveCellSizeMeters);
+  const activePlaybackFilters = $derived.by<AppliedMapFilters | null>(() => activeQuery
+    ? createPlaybackAppliedFilters({
+        filters: activeQuery.filters,
+        viewport
+      })
+    : null);
   const activeSidebarWidth = $derived(
     sidebarSizeOptions.find((option) => option.key === sidebarSize)?.width ?? '35rem'
   );
-  const visibleRawPointCount = $derived.by(() => {
-    if (activeMode !== 'aggregate') {
-      return points.length;
+  const activeTimeSliceWindows = $derived.by(() => activeQuery?.filters.timeFilterMode === 'absolute'
+    ? buildTimeSliceWindows({
+        sourceFilters: activeQuery.filters,
+        settings: timeSliceSettings
+      })
+    : []);
+  const activeTimeSlicePointSourceKey = $derived(activeQuery
+    ? serializeTimeSlicePointSourceQuery({ filters: activeQuery.filters })
+    : '');
+  const activeTimeSliceSourceKey = $derived(activeQuery
+    ? serializeTimeSliceSourceQuery({
+        filters: activeQuery.filters,
+        settings: timeSliceSettings
+      })
+    : '');
+  const activeTimeSliceSelectedPointCount = $derived(
+    loadedTimeSlicePointCountKey === activeTimeSlicePointSourceKey ? timeSlicePointCount : null
+  );
+  const visibleTimeSlicePointCount = $derived.by(() => (
+    activeMode === 'aggregate'
+      ? aggregates.reduce((total, cell) => total + cell.pointCount, 0)
+      : rawPointTotalCount || points.length
+  ));
+  const timeSliceDisplayPointCount = $derived(activeTimeSliceSelectedPointCount ?? visibleTimeSlicePointCount);
+  const timeSliceLargeLoadConfirmationKey = $derived.by(() => activeQuery && timeSliceEnabled
+    ? `${activeTimeSlicePointSourceKey}:${timeSliceDisplayPointCount}`
+    : '');
+  const timeSliceNeedsLargeLoadConfirmation = $derived.by(() => Boolean(
+    timeSliceEnabled
+    && activeTimeSliceWindows.length
+    && activeTimeSliceSelectedPointCount !== null
+    && activeTimeSliceSelectedPointCount > timeSliceLargePointWarningThreshold
+    && timeSliceLargeLoadConfirmedKey !== timeSliceLargeLoadConfirmationKey
+  ));
+  const activeTimeSlicePreparedWindows = $derived.by<PreparedTimeSliceWindow[]>(() => (
+    loadedTimeSliceSourceKey === activeTimeSliceSourceKey ? timeSlicePreparedWindows : []
+  ));
+  const activeTimeSliceWindow = $derived.by<PreparedTimeSliceWindow | null>(() => {
+    if (
+      !timeSliceEnabled
+      || timeSliceNeedsLargeLoadConfirmation
+      || loadedTimeSliceSourceKey !== activeTimeSliceSourceKey
+    ) {
+      return null;
     }
 
-    return aggregates.reduce((total, cell) => total + cell.pointCount, 0);
+    return activeTimeSlicePreparedWindows[
+      Math.max(0, Math.min(timeSliceIndex, activeTimeSlicePreparedWindows.length - 1))
+    ] ?? null;
   });
-  const visibleCellCount = $derived.by(() => (
-    activeMode === 'aggregate' ? aggregates.length : 0
+  const activeTimeSliceDisplayStartMs = $derived.by(() => (
+    timeSliceCurrentOnly
+      ? activeTimeSliceWindow?.startMs ?? null
+      : activeTimeSliceWindows[0]?.startMs ?? activeTimeSliceWindow?.startMs ?? null
   ));
-  const activeColorScale = $derived.by(() => getEffectiveColorScale({
-    cells: aggregates,
-    aggregateStat: activeAggregateStat,
-    settings: colorScaleSettings
-  }));
-  const activeLegendScaleValues = $derived.by(() => ({
-    low: activeColorScale ? formatNumber(activeColorScale.low) : null,
-    mid: activeColorScale ? formatNumber(activeColorScale.mid) : null,
-    high: activeColorScale ? formatNumber(activeColorScale.high) : null
-  }));
-  const legendNeedsWide = $derived.by(() => {
-    const labels = [
-      `${t('radtrack-common_low-label')} ${activeLegendScaleValues.low ?? ''}`.trim(),
-      `${t('radtrack-common_mid-label')} ${activeLegendScaleValues.mid ?? ''}`.trim(),
-      `${t('radtrack-common_high-label')} ${activeLegendScaleValues.high ?? ''}`.trim()
-    ];
+  const activeTimeSliceDisplayStartIso = $derived.by(() => (
+    activeTimeSliceDisplayStartMs === null
+      ? null
+      : new Date(activeTimeSliceDisplayStartMs).toISOString()
+  ));
+  const timeSliceIntervalLabel = $derived.by(() => {
+    const normalized = normalizeTimeSliceSettings({ settings: timeSliceSettings });
+    return t('radtrack-map_time_slice_interval_summary-label', {
+      amount: formatCount(normalized.amount),
+      unit: t(getTimeSliceUnitLabelKey({
+        amount: normalized.amount,
+        unit: normalized.unit
+      }))
+    });
+  });
+  const timeSliceSummary = $derived.by(() => {
+    if (!timeSliceEnabled) {
+      return t('radtrack-map_time_slice_all_data-label');
+    }
 
-    return labels.some((label) => label.length > 18)
-      || labels.join('').length > 48
-      || activeLegendSummary.length > 20;
+    if (timeSliceNeedsLargeLoadConfirmation) {
+      return t('radtrack-map_time_slice_large_load_warning-label', {
+        count: formatCount(timeSliceDisplayPointCount)
+      });
+    }
+
+    if (!activeTimeSliceWindows.length) {
+      return t('radtrack-map_time_slice_unavailable-label');
+    }
+
+    if (
+      timeSliceSourceErrorKey === activeTimeSliceSourceKey
+      || timeSlicePointCountErrorKey === activeTimeSlicePointSourceKey
+    ) {
+      return t('radtrack-map_time_slice_source_failed-label');
+    }
+
+    if (
+      timeSlicePointCountLoading
+      || activeTimeSliceSelectedPointCount === null
+      || loadedTimeSliceSourceKey !== activeTimeSliceSourceKey
+    ) {
+      return t('radtrack-map_time_slice_source_loading-label');
+    }
+
+    return activeTimeSliceWindow
+      ? t('radtrack-map_time_slice_window_summary-label', {
+        current: formatCount(activeTimeSliceWindow.index + 1),
+        total: formatCount(activeTimeSliceWindows.length),
+        start: formatTime(activeTimeSliceDisplayStartIso ?? activeTimeSliceWindow.startIso),
+        end: formatTime(activeTimeSliceWindow.endIso)
+      })
+      : t('radtrack-map_time_slice_unavailable-label');
+  });
+  const timeSlicePerformanceWarning = $derived.by(() => {
+    const sourceCount = timeSliceSourcePoints.length;
+    if (!timeSliceEnabled || !activeTimeSliceWindow || sourceCount < 50000) {
+      return null;
+    }
+
+    return t('radtrack-map_time_slice_performance_warning-label', {
+      count: formatCount(sourceCount)
+    });
+  });
+  const displayedPoints = $derived.by<MapPoint[]>(() => {
+    if (activeMode !== 'raw') {
+      return [];
+    }
+
+    return activeTimeSliceWindow
+      ? getPreparedTimeSlicePointsInViewport({
+          currentOnly: timeSliceCurrentOnly,
+          points: timeSliceSourcePoints,
+          sourceViewport: viewport,
+          window: activeTimeSliceWindow
+        })
+      : points;
   });
   const selectedTrackGroups = $derived.by(() => getTrackGroupsForFilters({ sourceFilters: filters }));
   const pendingPopupMetricStates = $derived.by<Record<string, boolean>>(() => getPopupMetricStates({
@@ -2036,6 +2880,66 @@
     .filter((field) => pendingPopupMetricStates[field.propKey]));
   const appliedVisiblePopupFields = $derived.by(() => appliedAvailablePopupFields
     .filter((field) => appliedPopupMetricStates[field.propKey]));
+  const displayedAggregateSourcePoints = $derived.by<MapPoint[]>(() => (
+    activeMode === 'aggregate' && activeTimeSliceWindow
+      ? getPreparedTimeSlicePointsInViewport({
+          currentOnly: timeSliceCurrentOnly,
+          points: timeSliceSourcePoints,
+          sourceViewport: viewport,
+          window: activeTimeSliceWindow
+        })
+      : []
+  ));
+  const displayedAggregates = $derived.by<AggregateCell[]>(() => {
+    if (activeMode !== 'aggregate') {
+      return [];
+    }
+
+    if (!activeTimeSliceWindow) {
+      return aggregates;
+    }
+
+    if (!activePlaybackFilters || timeSliceSourceLoading) {
+      return [];
+    }
+
+    return buildAggregateCellsForPoints({
+      popupFieldsForCells: appliedVisiblePopupFields,
+      sourceFilters: activePlaybackFilters,
+      sourcePoints: displayedAggregateSourcePoints
+    });
+  });
+  const visibleRawPointCount = $derived.by(() => {
+    if (activeMode !== 'aggregate') {
+      return displayedPoints.length;
+    }
+
+    return displayedAggregates.reduce((total, cell) => total + cell.pointCount, 0);
+  });
+  const visibleCellCount = $derived.by(() => (
+    activeMode === 'aggregate' ? displayedAggregates.length : 0
+  ));
+  const activeColorScale = $derived.by(() => getEffectiveColorScale({
+    cells: displayedAggregates,
+    aggregateStat: activeAggregateStat,
+    settings: colorScaleSettings
+  }));
+  const activeLegendScaleValues = $derived.by(() => ({
+    low: activeColorScale ? formatNumber(activeColorScale.low) : null,
+    mid: activeColorScale ? formatNumber(activeColorScale.mid) : null,
+    high: activeColorScale ? formatNumber(activeColorScale.high) : null
+  }));
+  const legendNeedsWide = $derived.by(() => {
+    const labels = [
+      `${t('radtrack-common_low-label')} ${activeLegendScaleValues.low ?? ''}`.trim(),
+      `${t('radtrack-common_mid-label')} ${activeLegendScaleValues.mid ?? ''}`.trim(),
+      `${t('radtrack-common_high-label')} ${activeLegendScaleValues.high ?? ''}`.trim()
+    ];
+
+    return labels.some((label) => label.length > 18)
+      || labels.join('').length > 48
+      || activeLegendSummary.length > 20;
+  });
   const aggregateCellModalColumns = $derived.by<AggregateCellModalColumn[]>(() => {
     const columns = new Map<string, AggregateCellModalColumn>();
 
@@ -2098,7 +3002,7 @@
       return null;
     }
 
-    return aggregates.find((cell) => cell.id === modalState.cellId) ?? null;
+    return displayedAggregates.find((cell) => cell.id === modalState.cellId) ?? null;
   });
   const aggregateCellModalDisplayCell = $derived.by(() => (
     aggregateCellModalCurrentCell
@@ -2108,7 +3012,26 @@
   const aggregateCellModalSubtitle = $derived.by(() => aggregateCellModalDisplayCell
     ? formatAggregateTimeRange({ timeRange: aggregateCellModalDisplayCell.timeRange })
     : null);
-  const aggregateCellModalRows = $derived.by<AggregateCellModalRow[]>(() => aggregateCellModalPoints.map((point) => ({
+  const aggregateCellModalVisiblePoints = $derived.by<MapPoint[]>(() => {
+    const snapshot = activeQuery;
+    if (
+      aggregateCellModalCurrentCell
+      && activeTimeSliceWindow
+      && activeMode === 'aggregate'
+      && snapshot
+      && activePlaybackFilters
+    ) {
+      return displayedAggregateSourcePoints.filter((point) => (
+        getAggregateCellForPoint({
+          point,
+          sourceFilters: activePlaybackFilters
+        })?.id === aggregateCellModalCurrentCell.id
+      ));
+    }
+
+    return aggregateCellModalPoints;
+  });
+  const aggregateCellModalRows = $derived.by<AggregateCellModalRow[]>(() => aggregateCellModalVisiblePoints.map((point) => ({
     id: point.id,
     values: Object.fromEntries(aggregateCellModalColumns.map((column) => [
       column.propKey,
@@ -2132,8 +3055,11 @@
       ? {
           mode: 'absolute',
           precision: activeQuery.filters.timeFilterPrecision,
-          dateFrom: absoluteTimeWindow?.dateFrom ?? null,
-          dateTo: absoluteTimeWindow?.dateTo ?? null
+          dateFrom: activeTimeSliceWindow?.startIso ?? absoluteTimeWindow?.dateFrom ?? null,
+          dateTo: activeTimeSliceWindow?.endIso ?? absoluteTimeWindow?.dateTo ?? null,
+          fullDateFrom: absoluteTimeWindow?.dateFrom ?? null,
+          fullDateTo: absoluteTimeWindow?.dateTo ?? null,
+          sliceIndex: activeTimeSliceWindow?.index ?? null
         }
       : activeQuery.filters.timeFilterMode === 'relative'
         ? {
@@ -2309,13 +3235,13 @@
       return t('radtrack-map_live_updates_disabled_absolute-label');
     }
 
-    if (!liveUpdatesEnabled) {
+    if (!liveUpdatesEnabled || !liveUpdatesActive) {
       return t('radtrack-map_live_updates_off-label');
     }
 
-    return liveUpdateTransport === 'websocket'
-      ? t('radtrack-map_live_updates_websocket-label')
-      : t('radtrack-map_live_updates_polling-label');
+    return liveUpdateTransport === 'polling'
+      ? t('radtrack-map_live_updates_polling-label')
+      : t('radtrack-map_live_updates_websocket-label');
   });
 
   const clearScheduledSidebarUpdate = () => {
@@ -2424,6 +3350,182 @@
     sinceCursor
   });
 
+  const buildTimeBoundsQuery = ({
+    sourceFilters
+  }: {
+    sourceFilters: MapFilters | AppliedMapFilters;
+  }) => ({
+    datasetIds: sourceFilters.datasetIds,
+    combinedDatasetIds: sourceFilters.combinedDatasetIds,
+    datalogIds: sourceFilters.trackIds,
+    datalogSelectionMode: sourceFilters.trackSelectionMode,
+    applyExcludeAreas: sourceFilters.applyExcludeAreas
+  });
+
+  const buildLiveUpdateStatusQuery = ({
+    includePoints = false,
+    sinceCursor,
+    snapshot
+  }: {
+    includePoints?: boolean;
+    sinceCursor: number | null;
+    snapshot: MapQuerySnapshot;
+  }) => ({
+    ...buildLiveUpdateQuery({
+      snapshot,
+      sinceCursor
+    }),
+    includePoints,
+    pointLimit: includePoints ? liveUpdatePointLimit : undefined
+  });
+
+  const normalizeLiveUpdatePointDetail = ({ value }: { value: unknown }): LiveUpdatePointDetail | null => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return null;
+    }
+
+    const record = value as Record<string, unknown>;
+    const cursor = toLiveUpdateCursor(record.cursor);
+    const latitude = toFiniteNumber(record.latitude);
+    const longitude = toFiniteNumber(record.longitude);
+    if (
+      cursor === null
+      || typeof record.id !== 'string'
+      || typeof record.datasetId !== 'string'
+      || typeof record.datalogId !== 'string'
+    ) {
+      return null;
+    }
+
+    return {
+      cursor,
+      publishedAt: typeof record.publishedAt === 'string' ? record.publishedAt : new Date().toISOString(),
+      id: record.id,
+      datasetId: record.datasetId,
+      datalogId: record.datalogId,
+      occurredAt: typeof record.occurredAt === 'string' ? record.occurredAt : null,
+      receivedAt: typeof record.receivedAt === 'string' ? record.receivedAt : null,
+      latitude,
+      longitude,
+      altitudeMeters: toFiniteNumber(record.altitudeMeters),
+      accuracy: toFiniteNumber(record.accuracy),
+      measurements: record.measurements && typeof record.measurements === 'object' && !Array.isArray(record.measurements)
+        ? Object.fromEntries(Object.entries(record.measurements).flatMap(([key, rawValue]) => {
+            const numericValue = toFiniteNumber(rawValue);
+            return numericValue === null ? [] : [[key, numericValue]];
+          }))
+        : {}
+    };
+  };
+
+  const normalizeLiveUpdateStatus = ({ value }: { value: unknown }): LiveUpdateStatus => {
+    const record = value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+
+    return {
+      hasUpdates: record.hasUpdates === true,
+      updateCount: Math.max(0, Math.trunc(toFiniteNumber(record.updateCount) ?? 0)),
+      latestCursor: toLiveUpdateCursor(record.latestCursor) ?? undefined,
+      latestPublishedAt: typeof record.latestPublishedAt === 'string' ? record.latestPublishedAt : undefined,
+      currentCursor: toLiveUpdateCursor(record.currentCursor) ?? undefined,
+      currentPublishedAt: typeof record.currentPublishedAt === 'string' ? record.currentPublishedAt : undefined,
+      points: Array.isArray(record.points)
+        ? record.points.map((point) => normalizeLiveUpdatePointDetail({ value: point })).filter((point): point is LiveUpdatePointDetail => Boolean(point))
+        : undefined
+    };
+  };
+
+  const clearLiveUpdateDisplay = ({ clearLog = false }: { clearLog?: boolean } = {}) => {
+    liveUpdateMarkers = [];
+    liveUpdateMarkersSetAt = 0;
+    if (clearLog) {
+      liveUpdateLog = [];
+    }
+  };
+
+  const appendLiveUpdatePoints = ({
+    points: nextPoints
+  }: {
+    points: LiveUpdatePointDetail[];
+  }) => {
+    if (!nextPoints.length) {
+      return;
+    }
+
+    const existingKeys = new Set(liveUpdateLog.map((entry) => entry.key));
+    const nextEntries = nextPoints
+      .map((point) => ({
+        key: `${point.cursor}:${point.id}`,
+        cursor: point.cursor,
+        publishedAt: point.publishedAt,
+        point
+      }))
+      .filter((entry) => !existingKeys.has(entry.key));
+
+    if (nextEntries.length) {
+      liveUpdateLog = [...nextEntries, ...liveUpdateLog].slice(0, maxLiveUpdateLogEntries);
+    }
+
+    const nextMarkers = nextPoints
+      .filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude))
+      .map((point) => ({
+        id: `${point.cursor}:${point.id}`,
+        latitude: Number(point.latitude),
+        longitude: Number(point.longitude),
+        occurredAt: point.occurredAt ?? point.receivedAt,
+        publishedAt: point.publishedAt
+      }));
+
+    if (nextMarkers.length) {
+      liveUpdateMarkers = nextMarkers;
+      liveUpdateMarkersSetAt = Date.now();
+    }
+  };
+
+  const handleLiveUpdateStatus = async ({ status }: { status: LiveUpdateStatus }) => {
+    const currentCursor = toLiveUpdateCursor(status.currentCursor);
+    if (status.points?.length) {
+      appendLiveUpdatePoints({
+        points: status.points
+      });
+    }
+
+    if (status.hasUpdates) {
+      liveUpdatePendingCursor = maxLiveUpdateCursor(
+        liveUpdatePendingCursor,
+        toLiveUpdateCursor(status.latestCursor),
+        currentCursor
+      );
+      await triggerLiveUpdateRefresh();
+      return;
+    }
+
+    liveUpdateCursor = maxLiveUpdateCursor(liveUpdateCursor, currentCursor);
+  };
+
+  const fetchLiveUpdateDetailsAndRefresh = async () => {
+    if (!activeQuery || !liveUpdatesActive) {
+      return;
+    }
+
+    try {
+      const response = await apiFetch<any>({
+        path: '/api/map/live-updates',
+        query: buildLiveUpdateStatusQuery({
+          includePoints: true,
+          snapshot: activeQuery,
+          sinceCursor: liveUpdateCursor
+        })
+      });
+      await handleLiveUpdateStatus({
+        status: normalizeLiveUpdateStatus({ value: response.result })
+      });
+    } catch {
+      liveUpdateTransport = liveUpdatesActive ? 'polling' : 'idle';
+    }
+  };
+
   const clearLiveUpdateReconnectTimer = () => {
     if (!liveUpdateReconnectTimer) {
       return;
@@ -2440,6 +3542,24 @@
 
     clearInterval(liveUpdateTimer);
     liveUpdateTimer = null;
+  };
+
+  const clearLiveUpdateMarkerTimer = () => {
+    if (!liveUpdateMarkerTimer) {
+      return;
+    }
+
+    clearInterval(liveUpdateMarkerTimer);
+    liveUpdateMarkerTimer = null;
+  };
+
+  const clearTimeSlicePlaybackTimer = () => {
+    if (!timeSlicePlaybackTimer) {
+      return;
+    }
+
+    clearInterval(timeSlicePlaybackTimer);
+    timeSlicePlaybackTimer = null;
   };
 
   const closeLiveUpdateSocket = ({ resetTransport = true }: { resetTransport?: boolean } = {}) => {
@@ -2475,6 +3595,7 @@
     liveUpdatePendingCursor = null;
     liveUpdateRefreshQueued = false;
     liveUpdateRefreshInFlight = false;
+    clearLiveUpdateDisplay({ clearLog: true });
   };
 
   const scheduleLiveUpdateReconnect = () => {
@@ -2585,7 +3706,7 @@
         liveUpdatePendingCursor,
         toLiveUpdateCursor(payload.latestCursor)
       );
-      void triggerLiveUpdateRefresh();
+      void fetchLiveUpdateDetailsAndRefresh();
     }
   };
 
@@ -2597,7 +3718,7 @@
     try {
       const socket = new WebSocket(resolveApiWebSocketPath({ path: '/api/map/live-updates/ws' }));
       liveUpdateSocket = socket;
-      liveUpdateTransport = 'polling';
+      liveUpdateTransport = 'idle';
 
       socket.onopen = () => {
         if (liveUpdateSocket !== socket) {
@@ -2653,31 +3774,22 @@
   };
 
   const pollLiveUpdates = async () => {
-    if (!activeQuery || !liveUpdatesActive || activeQuery.filters.timeFilterMode === 'relative') {
+    if (!activeQuery || !liveUpdatesActive) {
       return;
     }
 
     try {
       const response = await apiFetch<any>({
         path: '/api/map/live-updates',
-        query: buildLiveUpdateQuery({
+        query: buildLiveUpdateStatusQuery({
+          includePoints: true,
           snapshot: activeQuery,
           sinceCursor: liveUpdateCursor
         })
       });
-      const status = response.result ?? {};
-      const currentCursor = toLiveUpdateCursor(status.currentCursor);
-      if (status.hasUpdates) {
-        liveUpdatePendingCursor = maxLiveUpdateCursor(
-          liveUpdatePendingCursor,
-          toLiveUpdateCursor(status.latestCursor),
-          currentCursor
-        );
-        void triggerLiveUpdateRefresh();
-        return;
-      }
-
-      liveUpdateCursor = maxLiveUpdateCursor(liveUpdateCursor, currentCursor);
+      await handleLiveUpdateStatus({
+        status: normalizeLiveUpdateStatus({ value: response.result })
+      });
     } catch {
       liveUpdateTransport = liveUpdatesActive ? 'polling' : 'idle';
     }
@@ -2990,9 +4102,14 @@
     let responseLiveUpdateCursor: number | null = null;
     const preservedSelectedPointId = preserveSelectedPoint ? selectedPoint?.id ?? null : null;
     const query = buildBaseQuery({ snapshot });
+    const nextTimeSlicePointSourceKey = serializeTimeSlicePointSourceQuery({ filters: snapshot.filters });
 
     loading = true;
     errorMessage = null;
+    rawPointTotalCount = 0;
+    if (activeTimeSlicePointSourceKey && activeTimeSlicePointSourceKey !== nextTimeSlicePointSourceKey) {
+      clearTimeSlicePlaybackData();
+    }
     if (!preserveSelectedPoint) {
       selectedPoint = null;
     }
@@ -3010,6 +4127,7 @@
 
         responseLiveUpdateCursor = toLiveUpdateCursor(response.result?.liveUpdates?.currentCursor);
         points = response.result.points;
+        rawPointTotalCount = Number(response.result.totalCount ?? response.result.points.length);
         aggregates = [];
         if (preservedSelectedPointId) {
           selectedPoint = response.result.points.find((point: MapPoint) => point.id === preservedSelectedPointId) ?? null;
@@ -3035,6 +4153,7 @@
       responseLiveUpdateCursor = toLiveUpdateCursor(response.result?.liveUpdates?.currentCursor);
       points = [];
       selectedPoint = null;
+      rawPointTotalCount = 0;
       const responseCache = normalizeAggregateCache({ value: response.result.cache });
       aggregates = response.result.cells.map((cell: AggregateCell) => ({
         ...cell,
@@ -3194,7 +4313,324 @@
     handleFilterChange();
   };
 
+  const formatIsoForTimeFilterInput = ({
+    isoValue,
+    precision
+  }: {
+    isoValue: string | null | undefined;
+    precision: TimeFilterPrecision;
+  }) => {
+    if (!isoValue) {
+      return null;
+    }
+
+    const date = new Date(isoValue);
+    if (Number.isNaN(date.getTime())) {
+      return null;
+    }
+
+    return precision === 'date'
+      ? formatLocalDateInputValue({ value: date })
+      : formatLocalDateTimeInputValue({ value: date });
+  };
+
+  const loadSelectedTimeBounds = async () => {
+    if (timeBoundsLoading) {
+      return null;
+    }
+
+    timeBoundsLoading = true;
+    try {
+      const response = await apiFetch<any>({
+        path: '/api/map/time-bounds',
+        query: buildTimeBoundsQuery({
+          sourceFilters: filters
+        })
+      });
+      const result = response.result ?? {};
+      return {
+        start: typeof result.start === 'string' ? result.start : null,
+        end: typeof result.end === 'string' ? result.end : null
+      };
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : t('radtrack-map_failed');
+      return null;
+    } finally {
+      timeBoundsLoading = false;
+    }
+  };
+
+  const setAbsoluteTimeFilterStartToEarliest = async () => {
+    const bounds = await loadSelectedTimeBounds();
+    const start = formatIsoForTimeFilterInput({
+      isoValue: bounds?.start,
+      precision: filters.timeFilterPrecision
+    });
+    if (!start) {
+      return;
+    }
+
+    filters = {
+      ...filters,
+      timeFilterStart: start
+    };
+    handleFilterChange();
+  };
+
+  const setAbsoluteTimeFilterEndToLatest = async () => {
+    const bounds = await loadSelectedTimeBounds();
+    const end = formatIsoForTimeFilterInput({
+      isoValue: bounds?.end,
+      precision: filters.timeFilterPrecision
+    });
+    if (!end) {
+      return;
+    }
+
+    filters = {
+      ...filters,
+      timeFilterEnd: end
+    };
+    handleFilterChange();
+  };
+
+  const setAbsoluteTimeFilterEndToNow = () => {
+    const now = new Date();
+    filters = {
+      ...filters,
+      timeFilterEnd: filters.timeFilterPrecision === 'date'
+        ? formatLocalDateInputValue({ value: now })
+        : formatLocalDateTimeInputValue({ value: now })
+    };
+    handleFilterChange();
+  };
+
+  const resetTimeSlicePlayback = () => {
+    timeSliceIndex = 0;
+    timeSlicePlaying = false;
+    clearTimeSlicePlaybackTimer();
+  };
+
+  const clearTimeSliceSource = () => {
+    timeSliceSourceRequestVersion += 1;
+    timeSliceSourceLoading = false;
+    timeSliceSourcePoints = [];
+    timeSlicePreparedWindows = [];
+    loadedTimeSliceSourceKey = '';
+    timeSliceSourceErrorKey = '';
+  };
+
+  const clearTimeSlicePointCount = () => {
+    timeSlicePointCountRequestVersion += 1;
+    timeSlicePointCount = null;
+    timeSlicePointCountLoading = false;
+    loadedTimeSlicePointCountKey = '';
+    timeSlicePointCountErrorKey = '';
+  };
+
+  const clearTimeSlicePlaybackData = () => {
+    clearTimeSliceSource();
+    clearTimeSlicePointCount();
+  };
+
+  const handleTimeSliceEnabledChange = (event: Event) => {
+    timeSliceEnabled = (event.currentTarget as HTMLInputElement).checked;
+    resetTimeSlicePlayback();
+    if (!timeSliceEnabled) {
+      timeSliceConfigOpen = false;
+      timeSliceLargeLoadConfirmedKey = '';
+      clearTimeSlicePlaybackData();
+    }
+  };
+
+  const confirmTimeSliceLargeLoad = () => {
+    if (!timeSliceLargeLoadConfirmationKey) {
+      return;
+    }
+
+    timeSliceLargeLoadConfirmedKey = timeSliceLargeLoadConfirmationKey;
+    timeSliceSourceErrorKey = '';
+
+    if (activeQuery && activeTimeSliceSourceKey && activeTimeSliceSelectedPointCount !== null) {
+      void loadTimeSliceSourceForSnapshot({
+        snapshot: activeQuery,
+        sourceKey: activeTimeSliceSourceKey
+      });
+    }
+  };
+
+  const handleTimeSliceCurrentOnlyChange = (event: Event) => {
+    timeSliceCurrentOnly = (event.currentTarget as HTMLInputElement).checked;
+  };
+
+  const loadTimeSlicePointCountForSnapshot = async ({
+    snapshot,
+    sourceKey
+  }: {
+    snapshot: MapQuerySnapshot;
+    sourceKey: string;
+  }) => {
+    const countRequestId = ++timeSlicePointCountRequestVersion;
+    timeSlicePointCountLoading = true;
+    timeSlicePointCount = null;
+    loadedTimeSlicePointCountKey = '';
+    timeSlicePointCountErrorKey = '';
+
+    try {
+      const response = await apiFetch<any>({
+        path: '/api/map/point-count',
+        query: {
+          ...buildBaseQuery({
+            includeViewport: false,
+            snapshot
+          }),
+          requireCoordinates: true,
+          historicalCacheEligible: false
+        }
+      });
+
+      if (countRequestId !== timeSlicePointCountRequestVersion || activeTimeSlicePointSourceKey !== sourceKey) {
+        return;
+      }
+
+      timeSlicePointCount = Math.max(0, Math.trunc(toFiniteNumber(response.result?.totalCount) ?? 0));
+      loadedTimeSlicePointCountKey = sourceKey;
+    } catch (error) {
+      if (countRequestId !== timeSlicePointCountRequestVersion || activeTimeSlicePointSourceKey !== sourceKey) {
+        return;
+      }
+
+      timeSlicePointCountErrorKey = sourceKey;
+      errorMessage = error instanceof Error ? error.message : t('radtrack-map_failed');
+    } finally {
+      if (countRequestId === timeSlicePointCountRequestVersion) {
+        timeSlicePointCountLoading = false;
+      }
+    }
+  };
+
+  const loadTimeSliceSourceForSnapshot = async ({
+    snapshot,
+    sourceKey
+  }: {
+    snapshot: MapQuerySnapshot;
+    sourceKey: string;
+  }) => {
+    const sourceRequestId = ++timeSliceSourceRequestVersion;
+    timeSliceSourceLoading = true;
+    timeSliceSourcePoints = [];
+    loadedTimeSliceSourceKey = '';
+    timeSliceSourceErrorKey = '';
+
+    try {
+      const response = await apiFetch<any>({
+        path: '/api/map/time-slice-source',
+        query: {
+          ...buildBaseQuery({
+            includeViewport: false,
+            snapshot
+          }),
+          sliceAmount: normalizeTimeSliceSettings({ settings: timeSliceSettings }).amount,
+          sliceUnit: normalizeTimeSliceSettings({ settings: timeSliceSettings }).unit,
+          requireCoordinates: true
+        }
+      });
+
+      if (sourceRequestId !== timeSliceSourceRequestVersion || activeTimeSliceSourceKey !== sourceKey) {
+        return;
+      }
+
+      const responsePoints = Array.isArray(response.result?.points)
+        ? response.result.points
+        : [];
+      timeSliceSourcePoints = responsePoints
+        .map((point: MapPoint) => normalizePlaybackPoint({ point }))
+        .filter((point: MapPoint | null): point is MapPoint => Boolean(point));
+      timeSlicePreparedWindows = Array.isArray(response.result?.windows)
+        ? response.result.windows
+            .map((window: unknown) => normalizePreparedTimeSliceWindow({ value: window }))
+            .filter((window: PreparedTimeSliceWindow | null): window is PreparedTimeSliceWindow => Boolean(window))
+        : [];
+      loadedTimeSliceSourceKey = sourceKey;
+    } catch (error) {
+      if (sourceRequestId !== timeSliceSourceRequestVersion || activeTimeSliceSourceKey !== sourceKey) {
+        return;
+      }
+
+      timeSliceSourceErrorKey = sourceKey;
+      errorMessage = error instanceof Error ? error.message : t('radtrack-map_failed');
+    } finally {
+      if (sourceRequestId === timeSliceSourceRequestVersion) {
+        timeSliceSourceLoading = false;
+      }
+    }
+  };
+
+  const openTimeSliceConfig = () => {
+    timeSliceDraftSettings = { ...timeSliceSettings };
+    timeSliceConfigOpen = true;
+  };
+
+  const closeTimeSliceConfig = () => {
+    timeSliceConfigOpen = false;
+  };
+
+  const applyTimeSliceConfig = () => {
+    const nextTimeSliceSettings = normalizeTimeSliceSettings({
+      settings: timeSliceDraftSettings
+    });
+    timeSliceSettings = nextTimeSliceSettings;
+    timeSliceIndex = 0;
+    timeSlicePlaying = false;
+    timeSliceConfigOpen = false;
+
+    if (filterUrlSyncReady) {
+      replaceUrlMapState({
+        nextFilters: autoUpdateMap ? filters : getAppliedFilters(),
+        nextViewport: viewport
+      });
+    }
+  };
+
+  const setTimeSlicePosition = ({ index }: { index: number }) => {
+    if (!activeTimeSliceWindows.length) {
+      timeSliceIndex = 0;
+      timeSlicePlaying = false;
+      return;
+    }
+
+    timeSliceIndex = Math.max(0, Math.min(activeTimeSliceWindows.length - 1, Math.trunc(index)));
+    timeSlicePlaying = false;
+  };
+
+  const moveTimeSlice = ({ delta }: { delta: number }) => {
+    setTimeSlicePosition({
+      index: timeSliceIndex + delta
+    });
+  };
+
+  const toggleTimeSlicePlayback = () => {
+    if (!activeTimeSliceWindow || activeTimeSliceWindows.length < 2) {
+      timeSlicePlaying = false;
+      return;
+    }
+
+    if (timeSlicePlaying) {
+      timeSlicePlaying = false;
+      return;
+    }
+
+    if (timeSliceIndex >= activeTimeSliceWindows.length - 1) {
+      timeSliceIndex = 0;
+    }
+    timeSlicePlaying = true;
+  };
+
   const handleFilterChange = () => {
+    clearLiveUpdateDisplay({ clearLog: true });
+    timeSliceLargeLoadConfirmedKey = '';
+    resetTimeSlicePlayback();
+    clearTimeSlicePlaybackData();
     if (!autoUpdateMap) {
       clearScheduledSidebarUpdate();
       return;
@@ -3214,6 +4650,14 @@
     }
 
     if (!lookupsReady) {
+      return;
+    }
+
+    if (
+      timeSliceEnabled
+      && activeQuery?.filters.timeFilterMode === 'absolute'
+      && activeTimeSliceWindows.length
+    ) {
       return;
     }
 
@@ -3255,7 +4699,7 @@
       return;
     }
 
-    liveUpdateTransport = liveUpdateSocket?.readyState === WebSocket.OPEN ? 'websocket' : 'polling';
+    liveUpdateTransport = liveUpdateSocket?.readyState === WebSocket.OPEN ? 'websocket' : 'idle';
   };
 
   const handleAutoCellSizeToggle = () => {
@@ -3340,6 +4784,16 @@
       mapStageResizeObserver.observe(mapStageElement);
     }
 
+    liveUpdateMarkerTimer = setInterval(() => {
+      if (!liveUpdateMarkers.length || !liveUpdateMarkersSetAt) {
+        return;
+      }
+
+      if ((Date.now() - liveUpdateMarkersSetAt) >= liveUpdateMarkerMinimumVisibleMs) {
+        clearLiveUpdateDisplay();
+      }
+    }, liveUpdateMarkerSweepMs);
+
     loadMapPreferences();
     await loadLookups();
     const focusedMap = await initializeMapFocus();
@@ -3358,6 +4812,8 @@
   onDestroy(() => {
     mapStageResizeObserver?.disconnect();
     clearScheduledSidebarUpdate();
+    clearLiveUpdateMarkerTimer();
+    clearTimeSlicePlaybackTimer();
     teardownLiveUpdates();
   });
 
@@ -3375,8 +4831,17 @@
       || snapshot.key !== modalState.queryKey
       || activeShape !== modalState.shape
       || snapshot.filters.appliedCellSizeMeters !== modalState.cellSizeMeters
+      || !aggregateCellModalCurrentCell
     ) {
       closeAggregateCellModal();
+      return;
+    }
+
+    if (activeTimeSliceWindow) {
+      aggregateCellModalRequestVersion += 1;
+      aggregateCellModalPoints = [];
+      aggregateCellModalErrorMessage = null;
+      aggregateCellModalLoading = false;
       return;
     }
 
@@ -3399,6 +4864,147 @@
         nextViewport
       });
     });
+  });
+
+  $effect(() => {
+    const totalSlices = activeTimeSliceWindows.length;
+    if (!totalSlices) {
+      if (timeSliceIndex !== 0) {
+        timeSliceIndex = 0;
+      }
+      if (timeSlicePlaying) {
+        timeSlicePlaying = false;
+      }
+      return;
+    }
+
+    if (timeSliceIndex > totalSlices - 1) {
+      timeSliceIndex = totalSlices - 1;
+    }
+  });
+
+  $effect(() => {
+    const snapshot = activeQuery;
+    const sourceKey = activeTimeSlicePointSourceKey;
+    if (loading) {
+      return;
+    }
+
+    const shouldUsePlaybackSource = Boolean(
+      timeSliceEnabled
+      && snapshot
+      && snapshot.filters.timeFilterMode === 'absolute'
+      && activeTimeSliceWindows.length
+    );
+
+    if (!shouldUsePlaybackSource) {
+      if (
+        timeSliceSourceLoading
+        || timeSliceSourcePoints.length
+        || loadedTimeSliceSourceKey
+        || timeSliceSourceErrorKey
+        || timeSlicePointCountLoading
+        || timeSlicePointCount !== null
+        || loadedTimeSlicePointCountKey
+        || timeSlicePointCountErrorKey
+      ) {
+        clearTimeSlicePlaybackData();
+      }
+      return;
+    }
+
+    if (
+      !snapshot
+      || loadedTimeSlicePointCountKey === sourceKey
+      || timeSlicePointCountLoading
+      || timeSlicePointCountErrorKey === sourceKey
+    ) {
+      return;
+    }
+
+    void loadTimeSlicePointCountForSnapshot({
+      snapshot,
+      sourceKey
+    });
+  });
+
+  $effect(() => {
+    const snapshot = activeQuery;
+    const sourceKey = activeTimeSliceSourceKey;
+    if (loading) {
+      return;
+    }
+
+    const shouldLoadSource = Boolean(
+      timeSliceEnabled
+      && snapshot
+      && snapshot.filters.timeFilterMode === 'absolute'
+      && activeTimeSliceWindows.length
+      && activeTimeSliceSelectedPointCount !== null
+      && !timeSliceNeedsLargeLoadConfirmation
+    );
+
+    if (!shouldLoadSource) {
+      return;
+    }
+
+    if (
+      !snapshot
+      || loadedTimeSliceSourceKey === sourceKey
+      || timeSliceSourceLoading
+      || timeSliceSourceErrorKey === sourceKey
+    ) {
+      return;
+    }
+
+    void loadTimeSliceSourceForSnapshot({
+      snapshot,
+      sourceKey
+    });
+  });
+
+  $effect(() => {
+    if (!selectedPoint || activeMode !== 'raw' || !activeTimeSliceWindow) {
+      return;
+    }
+
+    if (!displayedPoints.some((point) => point.id === selectedPoint?.id)) {
+      selectedPoint = null;
+    }
+  });
+
+  $effect(() => {
+    clearTimeSlicePlaybackTimer();
+
+    const totalSlices = activeTimeSliceWindows.length;
+    const speed = timeSlicePlaybackSpeed;
+    if (!timeSlicePlaying || totalSlices < 2) {
+      return;
+    }
+
+    timeSlicePlaybackStartedAt = Date.now();
+    timeSlicePlaybackStartIndex = Math.max(0, Math.min(timeSliceIndex, totalSlices - 1));
+    timeSlicePlaybackTimer = setInterval(() => {
+      const frameMs = timeSlicePlaybackBaseMs / Math.max(1, speed);
+      const elapsedFrames = Math.floor((Date.now() - timeSlicePlaybackStartedAt) / frameMs);
+      if (elapsedFrames <= 0) {
+        return;
+      }
+
+      const nextIndex = timeSlicePlaybackStartIndex + elapsedFrames;
+      if (nextIndex >= totalSlices - 1) {
+        timeSliceIndex = totalSlices - 1;
+        timeSlicePlaying = false;
+        clearTimeSlicePlaybackTimer();
+        return;
+      }
+
+      timeSliceIndex = nextIndex;
+    }, 100);
+
+    return () => {
+      clearTimeSlicePlaybackTimer();
+    };
   });
 
   $effect(() => {
@@ -3457,19 +5063,26 @@
       return;
     }
 
-    if (!liveUpdateSocket) {
+    if (!liveUpdateSocket && !liveUpdateReconnectTimer) {
       openLiveUpdateSocket();
-    } else if (liveUpdateSocket.readyState === WebSocket.OPEN && liveUpdateSocketReady) {
+    } else if (liveUpdateSocket?.readyState === WebSocket.OPEN && liveUpdateSocketReady) {
       sendLiveUpdateSubscription();
     }
 
-    liveUpdateTransport = liveUpdateSocket?.readyState === WebSocket.OPEN ? 'websocket' : 'polling';
+    if (liveUpdateSocket?.readyState === WebSocket.OPEN) {
+      liveUpdateTransport = 'websocket';
+    } else if (liveUpdateTransport !== 'polling') {
+      liveUpdateTransport = 'idle';
+    }
     liveUpdateTimer = setInterval(() => {
       if (!activeQuery || !liveUpdatesActive) {
         return;
       }
 
       if (activeQuery.filters.timeFilterMode === 'relative') {
+        if (!liveUpdateSocket || liveUpdateSocket.readyState !== WebSocket.OPEN) {
+          void pollLiveUpdates();
+        }
         void triggerLiveUpdateRefresh();
         return;
       }
@@ -3569,6 +5182,43 @@
         </label>
         {#if !liveUpdatesAllowed}
           <p class="muted map-live-updates-note">{t('radtrack-map_live_updates_absolute_note-label')}</p>
+        {/if}
+
+        {#if liveUpdatesEnabled && liveUpdatesAllowed}
+          <details class="selector-accordion live-update-log-accordion">
+            <summary>
+              <span>{t('radtrack-map_live_update_log-title')}</span>
+              <span class="settings-accordion-meta">
+                <span class={liveUpdateLog.length ? 'chip start' : 'chip subtle'}>
+                  {formatCount(liveUpdateLog.length)}
+                </span>
+                <span aria-hidden="true" class="settings-accordion-icon"></span>
+              </span>
+            </summary>
+
+            {#if liveUpdateLog.length}
+              <div class="live-update-log-list">
+                {#each liveUpdateLog as entry}
+                  <div class="live-update-log-item">
+                    <div class="live-update-log-title">
+                      <span>{formatTime(entry.point.occurredAt ?? entry.point.receivedAt)}</span>
+                      <span class="chip subtle">{t('radtrack-map_live_update_cursor-label', { cursor: entry.cursor })}</span>
+                    </div>
+                    <div class="live-update-log-meta">
+                      <span>{t('radtrack-common_latitude-label')} {formatNumber(entry.point.latitude)}</span>
+                      <span>{t('radtrack-common_longitude-label')} {formatNumber(entry.point.longitude)}</span>
+                    </div>
+                    <div class="live-update-log-meta">
+                      <span>{t('radtrack-map_id_short-label', { id: shortId(entry.point.id) })}</span>
+                      <span>{formatTime(entry.publishedAt)}</span>
+                    </div>
+                  </div>
+                {/each}
+              </div>
+            {:else}
+              <div class="selection-empty muted">{t('radtrack-map_live_update_log_empty')}</div>
+            {/if}
+          </details>
         {/if}
 
         <div class="form-grid">
@@ -3784,6 +5434,17 @@
                     {:else}
                       <input bind:value={filters.timeFilterStart} oninput={handleFilterChange} type="datetime-local" />
                     {/if}
+                    <div class="time-filter-actions-row">
+                      <button
+                        aria-label={t('radtrack-map_time_filter_earliest-title')}
+                        disabled={timeBoundsLoading}
+                        onclick={setAbsoluteTimeFilterStartToEarliest}
+                        title={t('radtrack-map_time_filter_earliest-title')}
+                        type="button"
+                      >
+                        {t('radtrack-map_time_filter_earliest-button')}
+                      </button>
+                    </div>
                   </label>
 
                   <label>
@@ -3793,7 +5454,125 @@
                     {:else}
                       <input bind:value={filters.timeFilterEnd} oninput={handleFilterChange} type="datetime-local" />
                     {/if}
+                    <div class="time-filter-actions-row">
+                      <button
+                        aria-label={t('radtrack-map_time_filter_latest-title')}
+                        disabled={timeBoundsLoading}
+                        onclick={setAbsoluteTimeFilterEndToLatest}
+                        title={t('radtrack-map_time_filter_latest-title')}
+                        type="button"
+                      >
+                        {t('radtrack-map_time_filter_latest-button')}
+                      </button>
+                      <button
+                        aria-label={t('radtrack-map_time_filter_now-title')}
+                        onclick={setAbsoluteTimeFilterEndToNow}
+                        title={t('radtrack-map_time_filter_now-title')}
+                        type="button"
+                      >
+                        {t('radtrack-map_time_filter_now-button')}
+                      </button>
+                    </div>
                   </label>
+                </div>
+
+                <div class="time-slice-panel">
+                  <div class="time-slice-header">
+                    <label class="checkbox-field time-slice-toggle" title={t('radtrack-map_time_slice_playback-title')}>
+                      <input
+                        checked={timeSliceEnabled}
+                        onchange={handleTimeSliceEnabledChange}
+                        type="checkbox"
+                      />
+                      <span>{t('radtrack-map_time_slice_playback-label')}</span>
+                    </label>
+                    {#if timeSliceEnabled}
+                      <button onclick={openTimeSliceConfig} type="button">
+                        {t('radtrack-map_time_slice_configure-button')}
+                      </button>
+                    {/if}
+                  </div>
+
+                  {#if timeSliceEnabled}
+                    {#if timeSliceNeedsLargeLoadConfirmation}
+                      <div class="time-slice-confirm-row">
+                        <span class="warning-text">{timeSliceSummary}</span>
+                        <button onclick={confirmTimeSliceLargeLoad} type="button">
+                          {t('radtrack-map_time_slice_continue-button')}
+                        </button>
+                      </div>
+                    {:else}
+                      <div class="time-slice-summary">{timeSliceSummary}</div>
+
+                      <div class="time-slice-controls">
+                        <button
+                          aria-label={t('radtrack-common_previous-label')}
+                          disabled={!activeTimeSliceWindow || timeSliceIndex <= 0 || timeSliceSourceLoading}
+                          onclick={() => moveTimeSlice({ delta: -1 })}
+                          type="button"
+                        >
+                          &lt;
+                        </button>
+                        <button
+                          aria-label={timeSlicePlaying ? t('radtrack-map_time_slice_pause-button') : t('radtrack-map_time_slice_play-button')}
+                          disabled={!activeTimeSliceWindow || activeTimeSliceWindows.length < 2 || timeSliceSourceLoading}
+                          onclick={toggleTimeSlicePlayback}
+                          type="button"
+                        >
+                          {timeSlicePlaying ? t('radtrack-map_time_slice_pause-button') : t('radtrack-map_time_slice_play-button')}
+                        </button>
+                        <button
+                          aria-label={t('radtrack-common_next-label')}
+                          disabled={!activeTimeSliceWindow || timeSliceIndex >= activeTimeSliceWindows.length - 1 || timeSliceSourceLoading}
+                          onclick={() => moveTimeSlice({ delta: 1 })}
+                          type="button"
+                        >
+                          &gt;
+                        </button>
+                        <select
+                          aria-label={t('radtrack-map_time_slice_speed-label')}
+                          bind:value={timeSlicePlaybackSpeed}
+                          disabled={!activeTimeSliceWindow || activeTimeSliceWindows.length < 2 || timeSliceSourceLoading}
+                        >
+                          {#each timeSlicePlaybackSpeeds as speed}
+                            <option value={speed}>{speed}x</option>
+                          {/each}
+                        </select>
+                      </div>
+
+                      <input
+                        aria-label={t('radtrack-map_time_slice-title')}
+                        disabled={!activeTimeSliceWindow || timeSliceSourceLoading}
+                        max={Math.max(0, activeTimeSliceWindows.length - 1)}
+                        min="0"
+                        oninput={(event) => setTimeSlicePosition({
+                          index: Number((event.currentTarget as HTMLInputElement).value)
+                        })}
+                        step="1"
+                        type="range"
+                        value={Math.max(0, Math.min(timeSliceIndex, Math.max(0, activeTimeSliceWindows.length - 1)))}
+                      />
+
+                      <div class="time-slice-meta-row">
+                        <label class="checkbox-field time-slice-current-toggle" title={t('radtrack-map_time_slice_current_only-title')}>
+                          <input
+                            checked={timeSliceCurrentOnly}
+                            onchange={handleTimeSliceCurrentOnlyChange}
+                            type="checkbox"
+                          />
+                          <span>{t('radtrack-map_time_slice_current_only-label')}</span>
+                        </label>
+                        <span class="chip subtle">{timeSliceIntervalLabel}</span>
+                        {#if timeSliceSourceLoading}
+                          <span class="chip warning">{t('radtrack-map_time_slice_source_loading-label')}</span>
+                        {/if}
+                      </div>
+
+                      {#if timeSlicePerformanceWarning}
+                        <div class="selection-empty warning-text">{timeSlicePerformanceWarning}</div>
+                      {/if}
+                    {/if}
+                  {/if}
                 </div>
               {:else if filters.timeFilterMode === 'relative'}
                 <div class="grid cols-2 time-filter-range-grid">
@@ -3830,6 +5609,8 @@
 
             </div>
           </details>
+
+          <hr class="map-data-divider time-filter-divider" />
           </div>
 
           <label>
@@ -4035,10 +5816,11 @@
         >
         <LeafletMap
           aggregateStat={activeAggregateStat}
-          aggregates={aggregates}
+          aggregates={displayedAggregates}
           attribution={activeBasemap?.attribution ?? ''}
           colorScale={activeMode === 'aggregate' ? activeColorScale : null}
           focus={mapFocus}
+          liveUpdateMarkers={liveUpdateMarkers}
           metricLabels={popupLabelsRecord}
           metricValueTypes={fieldValueTypesRecord}
           mode={activeMode}
@@ -4051,7 +5833,7 @@
             selectedPoint = event.detail;
           }}
           on:viewportchange={handleViewportChange}
-          points={points}
+          points={displayedPoints}
           popupFields={appliedPopupFields}
           shape={activeShape}
           tileUrlTemplate={activeBasemap?.tileUrlTemplate ?? ''}
@@ -4069,6 +5851,52 @@
             rows={aggregateCellModalRows}
             subtitle={aggregateCellModalSubtitle}
           />
+        {/if}
+
+        {#if timeSliceConfigOpen}
+          <div class="map-config-modal-shell" role="presentation">
+            <button
+              aria-label={t('radtrack-common_close-button')}
+              class="map-config-modal-backdrop"
+              onclick={closeTimeSliceConfig}
+              type="button"
+            ></button>
+
+            <section
+              aria-labelledby="time-slice-config-title"
+              aria-modal="true"
+              class="panel map-config-modal"
+              role="dialog"
+            >
+              <header class="map-config-modal-header">
+                <h2 id="time-slice-config-title">{t('radtrack-map_time_slice_configure-title')}</h2>
+                <button onclick={closeTimeSliceConfig} type="button">{t('radtrack-common_close-button')}</button>
+              </header>
+
+              <div class="grid cols-2 time-filter-range-grid">
+                <label>
+                  <div class="muted">{t('radtrack-map_time_slice_interval_amount-label')}</div>
+                  <input bind:value={timeSliceDraftSettings.amount} min="1" step="1" type="number" />
+                </label>
+
+                <label>
+                  <div class="muted">{t('radtrack-map_time_slice_interval_unit-label')}</div>
+                  <select bind:value={timeSliceDraftSettings.unit}>
+                    <option value="days">{t('radtrack-map_time_filter_days-label')}</option>
+                    <option value="hours">{t('radtrack-map_time_filter_hours-label')}</option>
+                    <option value="minutes">{t('radtrack-map_time_slice_minutes-label')}</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="actions">
+                <button onclick={closeTimeSliceConfig} type="button">{t('radtrack-common_cancel-button')}</button>
+                <button class="primary" onclick={applyTimeSliceConfig} type="button">
+                  {t('radtrack-common_save-button')}
+                </button>
+              </div>
+            </section>
+          </div>
         {/if}
 
         <div class="map-overlay map-overlay-basemap">
@@ -4177,6 +6005,51 @@
     position: relative;
   }
 
+  .map-config-modal-shell {
+    position: absolute;
+    inset: 0;
+    z-index: 720;
+    display: grid;
+    place-items: start center;
+    padding: var(--space-4);
+  }
+
+  .map-config-modal-backdrop {
+    position: absolute;
+    inset: 0;
+    min-height: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: color-mix(in srgb, var(--color-bg) 52%, transparent);
+    box-shadow: none;
+    transform: none;
+  }
+
+  .map-config-modal-backdrop:hover {
+    border: none;
+    transform: none;
+  }
+
+  .map-config-modal {
+    position: relative;
+    z-index: 1;
+    width: min(30rem, calc(100% - (var(--space-4) * 2)));
+    display: grid;
+    gap: var(--space-4);
+  }
+
+  .map-config-modal-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .map-config-modal-header h2 {
+    margin: 0;
+  }
+
   .map-panel-header {
     display: flex;
     align-items: center;
@@ -4272,6 +6145,44 @@
     margin: 0 0 var(--space-4);
   }
 
+  .live-update-log-accordion {
+    margin-bottom: var(--space-4);
+  }
+
+  .live-update-log-list {
+    display: grid;
+    gap: var(--space-2);
+    max-height: 18rem;
+    overflow-y: auto;
+    padding: var(--space-2);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel);
+  }
+
+  .live-update-log-item {
+    display: grid;
+    gap: var(--space-1);
+    padding: 0.55rem 0.65rem;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel-strong);
+  }
+
+  .live-update-log-title,
+  .live-update-log-meta {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+  }
+
+  .live-update-log-meta {
+    color: var(--color-text-muted);
+    font-size: 0.9em;
+  }
+
   .field-group {
     padding-top: var(--space-3);
     border-top: 1px solid var(--color-border);
@@ -4298,6 +6209,12 @@
     margin: var(--space-3) 0 0;
     border: 0;
     background: var(--color-border);
+  }
+
+  .time-filter-divider {
+    height: 2px;
+    margin: var(--space-3) 0 var(--space-2);
+    background: var(--color-border-strong);
   }
 
   .selector-accordion {
@@ -4410,6 +6327,66 @@
 
   .time-filter-range-grid {
     gap: var(--space-3);
+  }
+
+  .time-filter-actions-row {
+    display: flex;
+    gap: var(--space-2);
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    margin-top: var(--space-2);
+  }
+
+  .time-slice-panel {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-panel-strong);
+  }
+
+  .time-slice-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+  }
+
+  .time-slice-summary {
+    margin-top: 0.15rem;
+    color: var(--color-text);
+    font-size: 0.92em;
+  }
+
+  .time-slice-toggle {
+    min-height: 2.4rem;
+  }
+
+  .time-slice-controls,
+  .time-slice-meta-row,
+  .time-slice-confirm-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+  }
+
+  .time-slice-confirm-row {
+    justify-content: space-between;
+  }
+
+  .time-slice-controls button {
+    min-width: 2.4rem;
+  }
+
+  .time-slice-controls select {
+    width: auto;
+    min-width: 5rem;
+  }
+
+  .time-slice-panel input[type='range'] {
+    width: 100%;
   }
 
   .warning-text {
