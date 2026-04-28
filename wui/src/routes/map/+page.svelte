@@ -2943,7 +2943,7 @@
   const aggregateCellModalColumns = $derived.by<AggregateCellModalColumn[]>(() => {
     const columns = new Map<string, AggregateCellModalColumn>();
 
-    for (const field of appliedVisiblePopupFields) {
+    for (const field of visiblePopupFields) {
       if (field.propKey === aggregateDataCountPropKey) {
         continue;
       }
@@ -3189,16 +3189,34 @@
 
   const getAppliedFilters = () => cloneFilters(activeQuery?.filters ?? filters);
   const getPendingPopupStateSnapshot = (): PopupStateSnapshot => ({
-    metrics: { ...popupFields.metrics },
+    metrics: { ...pendingPopupMetricStates },
     touched: { ...popupFieldTouched }
   });
-  const getAppliedPopupStateSnapshot = (): PopupStateSnapshot => clonePopupStateSnapshot(appliedPopupState);
+  const getAppliedPopupStateSnapshot = (): PopupStateSnapshot => ({
+    metrics: { ...appliedPopupMetricStates },
+    touched: { ...appliedPopupState.touched }
+  });
+  const getEnabledPopupFieldKeys = ({ popupState }: { popupState: PopupStateSnapshot }) => (
+    Object.entries(popupState.metrics)
+      .filter(([, enabled]) => enabled)
+      .map(([propKey]) => propKey)
+      .filter((propKey) => ![
+        aggregateDataCountPropKey,
+        'radtrackCacheKey',
+        'radtrackCacheSource',
+        'radtrackCacheTtlSeconds'
+      ].includes(propKey))
+      .sort((left, right) => left.localeCompare(right))
+  );
+  const hasPendingPopupFieldChanges = () => (
+    serializePopupMetricStates({ states: pendingPopupMetricStates }) !== serializePopupMetricStates({
+      states: appliedPopupMetricStates
+    })
+  );
 
   const hasPendingSidebarChanges = () => (
     serializeFilters({ filters }) !== serializeFilters({ filters: activeQuery?.filters ?? filters })
-    || serializePopupMetricStates({ states: pendingPopupMetricStates }) !== serializePopupMetricStates({
-      states: appliedPopupMetricStates
-    })
+    || hasPendingPopupFieldChanges()
   );
   const hasPendingUrlState = $derived.by(() => (
     filterUrlSyncReady
@@ -3292,6 +3310,14 @@
     const nextSnapshot = getCurrentQuerySnapshot();
 
     if (nextSnapshot.key === activeQuery?.key && !nextSnapshot.filters.forceRecheck) {
+      if (nextSnapshot.filters.mode === 'aggregate' && hasPendingPopupFieldChanges()) {
+        requestMapData({
+          popupState: nextPopupState,
+          snapshot: nextSnapshot
+        });
+        return;
+      }
+
       appliedPopupState = nextPopupState;
       return;
     }
@@ -4142,6 +4168,8 @@
           ...query,
           shape: snapshot.filters.shape,
           cellSizeMeters: snapshot.filters.appliedCellSizeMeters,
+          popupFieldKeys: getEnabledPopupFieldKeys({ popupState }),
+          popupFieldKeysExplicit: true,
           zoom: snapshot.viewport.zoom
         }
       });

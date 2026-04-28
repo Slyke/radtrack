@@ -17,16 +17,13 @@
     type MapDatasetOrder
   } from '$lib/map-dataset-defaults';
   import {
-    isMapFieldVisible,
-    loadMapFieldVisibility,
     loadMapFieldOrder,
     moveMapFieldOrder,
     orderMapFields,
-    persistMapFieldVisibility,
     persistMapFieldOrder,
-    type MapFieldOrder,
-    type MapFieldVisibilityRecord
+    type MapFieldOrder
   } from '$lib/map-field-visibility';
+  import type { MetricField } from '$lib/datalog-fields';
   import { sessionStore } from '$lib/stores/session';
 
   type DatasetSummary = {
@@ -52,6 +49,10 @@
       datasetId: string;
       datasetName: string;
       displayName: string;
+      editable?: boolean;
+      popupDefaultEnabled: boolean;
+      metricListEnabled: boolean;
+      supportedFields: MetricField[];
     }>;
   };
 
@@ -60,7 +61,7 @@
   let mapDatasetDefaults = $state<MapDatasetDefaultRecord>({});
   let mapDatasetOrder = $state<MapDatasetOrder>([]);
   let mapFieldOrder = $state<MapFieldOrder>([]);
-  let mapFieldVisibility = $state<MapFieldVisibilityRecord>({});
+  let updatingFieldKeys = $state<Record<string, boolean>>({});
   let errorMessage = $state<string | null>(null);
   let createForm = $state({
     name: '',
@@ -93,26 +94,15 @@
     }
   };
 
-  const syncMapFieldVisibility = () => {
+  const syncMapSettings = () => {
     mapDatasetDefaults = loadMapDatasetDefaults({
       userId: $sessionStore.user?.id ?? null
     });
     mapDatasetOrder = loadMapDatasetOrder({
       userId: $sessionStore.user?.id ?? null
     });
-    mapFieldVisibility = loadMapFieldVisibility({
-      userId: $sessionStore.user?.id ?? null
-    });
     mapFieldOrder = loadMapFieldOrder({
       userId: $sessionStore.user?.id ?? null
-    });
-  };
-
-  const persistVisibility = (visibility: MapFieldVisibilityRecord) => {
-    mapFieldVisibility = visibility;
-    persistMapFieldVisibility({
-      userId: $sessionStore.user?.id ?? null,
-      visibility
     });
   };
 
@@ -138,17 +128,6 @@
       userId: $sessionStore.user?.id ?? null,
       order
     });
-  };
-
-  const setFieldVisibility = ({ propKey, enabled }: { propKey: string; enabled: boolean }) => {
-    persistVisibility({
-      ...mapFieldVisibility,
-      [propKey]: enabled
-    });
-  };
-
-  const setAllFieldVisibility = ({ enabled }: { enabled: boolean }) => {
-    persistVisibility(Object.fromEntries(fieldInventory.map((field) => [field.propKey, enabled])));
   };
 
   const setDatasetDefaultEnabled = ({
@@ -179,11 +158,109 @@
   }));
 
   const enabledFieldCount = $derived.by(() => fieldInventory
-    .filter((field) => isMapFieldVisible({
-      visibility: mapFieldVisibility,
-      propKey: field.propKey
-    }))
+    .filter((field) => field.datalogs.some((datalog) => datalog.popupDefaultEnabled !== false))
     .length);
+
+  const metricListFieldCount = $derived.by(() => fieldInventory
+    .filter((field) => field.source !== 'synthetic' && field.valueType !== 'string')
+    .filter((field) => field.datalogs.some((datalog) => datalog.metricListEnabled !== false))
+    .length);
+
+  const metricListEligibleFieldCount = $derived.by(() => fieldInventory
+    .filter((field) => field.source !== 'synthetic' && field.valueType !== 'string')
+    .length);
+
+  const isFieldPopupDefaultEnabled = (field: FieldInventoryEntry) => (
+    field.datalogs.some((datalog) => datalog.popupDefaultEnabled !== false)
+  );
+
+  const isFieldMetricListEnabled = (field: FieldInventoryEntry) => (
+    field.datalogs.some((datalog) => datalog.metricListEnabled !== false)
+  );
+
+  const fieldHasDirectSupportedField = (field: FieldInventoryEntry) => field.datalogs
+    .some((datalog) => datalog.editable !== false && datalog.supportedFields.some((supportedField) => supportedField.propKey === field.propKey));
+
+  const setFieldFlag = async ({
+    field,
+    key,
+    enabled
+  }: {
+    field: FieldInventoryEntry;
+    key: 'popupDefaultEnabled' | 'metricListEnabled';
+    enabled: boolean;
+  }) => {
+    const csrf = $sessionStore.csrf;
+    if (!csrf) {
+      return;
+    }
+
+    const updateKey = `${field.propKey}:${key}`;
+    updatingFieldKeys = {
+      ...updatingFieldKeys,
+      [updateKey]: true
+    };
+
+    const patchTargets = field.datalogs
+        .filter((datalog) => datalog.editable !== false)
+        .map((datalog) => ({
+          datalog,
+          supportedFields: datalog.supportedFields.map((supportedField) => (
+            supportedField.propKey === field.propKey
+              ? {
+                  ...supportedField,
+                  [key]: enabled
+                }
+              : supportedField
+          ))
+        }))
+        .filter((entry) => entry.supportedFields.some((supportedField) => supportedField.propKey === field.propKey));
+
+    if (!patchTargets.length) {
+      updatingFieldKeys = {
+        ...updatingFieldKeys,
+        [updateKey]: false
+      };
+      return;
+    }
+
+    try {
+      await Promise.all(patchTargets.map((entry) => apiFetch({
+          path: `/api/datalogs/${entry.datalog.id}`,
+          method: 'PATCH',
+          body: {
+            supportedFields: entry.supportedFields
+          },
+          csrf
+        })));
+      await loadDatasets();
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : t('radtrack-datasets_failed_update_field');
+    } finally {
+      updatingFieldKeys = {
+        ...updatingFieldKeys,
+        [updateKey]: false
+      };
+    }
+  };
+
+  const setAllFieldFlag = async ({
+    key,
+    enabled
+  }: {
+    key: 'popupDefaultEnabled' | 'metricListEnabled';
+    enabled: boolean;
+  }) => {
+    const fields = key === 'metricListEnabled'
+      ? fieldInventory.filter((field) => field.source !== 'synthetic' && field.valueType !== 'string')
+      : fieldInventory;
+
+    for (const field of fields) {
+      if (fieldHasDirectSupportedField(field)) {
+        await setFieldFlag({ field, key, enabled });
+      }
+    }
+  };
 
   const moveField = ({
     propKey,
@@ -270,7 +347,7 @@
   };
 
   onMount(async () => {
-    syncMapFieldVisibility();
+    syncMapSettings();
     await loadDatasets();
   });
 </script>
@@ -319,8 +396,10 @@
             <p class="muted">{t('radtrack-datasets_field_inventory-description')}</p>
           </div>
           <div class="actions">
-            <button onclick={() => setAllFieldVisibility({ enabled: true })}>+ All</button>
-            <button onclick={() => setAllFieldVisibility({ enabled: false })}>- All</button>
+            <button onclick={() => setAllFieldFlag({ key: 'popupDefaultEnabled', enabled: true })}>+ Popup</button>
+            <button onclick={() => setAllFieldFlag({ key: 'popupDefaultEnabled', enabled: false })}>- Popup</button>
+            <button onclick={() => setAllFieldFlag({ key: 'metricListEnabled', enabled: true })}>+ Metrics</button>
+            <button onclick={() => setAllFieldFlag({ key: 'metricListEnabled', enabled: false })}>- Metrics</button>
           </div>
         </div>
 
@@ -328,6 +407,10 @@
           <span class="chip subtle">{t('radtrack-datasets_field_inventory_enabled-label', {
             enabled: enabledFieldCount,
             total: fieldInventory.length
+          })}</span>
+          <span class="chip subtle">{t('radtrack-datasets_field_inventory_metric_list_enabled-label', {
+            enabled: metricListFieldCount,
+            total: metricListEligibleFieldCount
           })}</span>
         </div>
 
@@ -337,20 +420,36 @@
               <div class="field-inventory-row">
                 <div class="field-inventory-body">
                   <div class="field-inventory-topline">
-                    <label class="checkbox-field field-inventory-toggle">
-                      <input
-                        checked={isMapFieldVisible({
-                          visibility: mapFieldVisibility,
-                          propKey: field.propKey
-                        })}
-                        onchange={(event) => setFieldVisibility({
-                          propKey: field.propKey,
-                          enabled: (event.currentTarget as HTMLInputElement).checked
-                        })}
-                        type="checkbox"
-                      />
-                      <span>{t('radtrack-datasets_field_inventory_visible-label')}</span>
-                    </label>
+                    <div class="field-inventory-toggle-stack">
+                      <label class="checkbox-field field-inventory-toggle">
+                        <input
+                          checked={isFieldPopupDefaultEnabled(field)}
+                          disabled={!fieldHasDirectSupportedField(field) || Boolean(updatingFieldKeys[`${field.propKey}:popupDefaultEnabled`])}
+                          onchange={(event) => setFieldFlag({
+                            field,
+                            key: 'popupDefaultEnabled',
+                            enabled: (event.currentTarget as HTMLInputElement).checked
+                          })}
+                          type="checkbox"
+                        />
+                        <span>{t('radtrack-datasets_field_inventory_visible-label')}</span>
+                      </label>
+                      {#if field.source !== 'synthetic' && field.valueType !== 'string'}
+                        <label class="checkbox-field field-inventory-toggle">
+                          <input
+                            checked={isFieldMetricListEnabled(field)}
+                            disabled={!fieldHasDirectSupportedField(field) || Boolean(updatingFieldKeys[`${field.propKey}:metricListEnabled`])}
+                            onchange={(event) => setFieldFlag({
+                              field,
+                              key: 'metricListEnabled',
+                              enabled: (event.currentTarget as HTMLInputElement).checked
+                            })}
+                            type="checkbox"
+                          />
+                          <span>{t('radtrack-track_metric_list_enabled-label')}</span>
+                        </label>
+                      {/if}
+                    </div>
                     <code>{field.propKey}</code>
                     <span class="chip subtle">{formatFieldType({ source: field.source, valueType: field.valueType })}</span>
                     <span class="chip subtle">{field.datalogs.length} {t('radtrack-common_tracks-label')}</span>
@@ -631,12 +730,22 @@
     background: color-mix(in srgb, var(--color-panel) 92%, var(--color-accent) 8%);
   }
 
+  .field-inventory-toggle-stack {
+    display: grid;
+    gap: var(--space-2);
+    width: 17rem;
+  }
+
   .field-inventory-toggle {
-    display: inline-flex;
+    display: flex;
     align-items: center;
     gap: var(--space-3);
-    margin-right: 0.25rem;
     white-space: nowrap;
+  }
+
+  .field-inventory-toggle input[type='checkbox'] {
+    flex: 0 0 auto;
+    width: auto;
   }
 
   .field-inventory-body {
@@ -655,8 +764,9 @@
   }
 
   .field-inventory-topline {
-    display: flex;
-    flex-wrap: wrap;
+    display: grid;
+    grid-template-columns: 17rem auto auto auto auto;
+    justify-content: start;
     gap: var(--space-2);
     align-items: center;
   }
@@ -775,7 +885,16 @@
       grid-template-columns: 1fr;
     }
 
-    .field-inventory-toggle,
+    .field-inventory-topline {
+      grid-template-columns: minmax(0, 1fr);
+      justify-content: stretch;
+    }
+
+    .field-inventory-toggle-stack {
+      width: 17rem;
+      max-width: 100%;
+    }
+
     .field-inventory-body,
     .field-inventory-actions {
       grid-column: auto;

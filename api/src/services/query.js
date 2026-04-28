@@ -1,6 +1,7 @@
 import { createAppError } from '../lib/errors.js';
 import { logFeature } from '../lib/feature-logging.js';
 import {
+  getAggregateTimeBasePropKey,
   getCoreMetricColumn,
   isSyntheticPopupField,
   normalizePropKey,
@@ -20,8 +21,8 @@ const canonicalMaxLongitude = 180;
 const rowTimestampSql = 'COALESCE(r.occurred_at, r.received_at)';
 const defaultHistoricalQueryCacheTtlSeconds = 5 * 60;
 const rawPointQueryCacheVersion = 'v2';
-const aggregateQueryCacheVersion = 'v3';
-const aggregateCellCacheVersion = 'v4';
+const aggregateQueryCacheVersion = 'v4';
+const aggregateCellCacheVersion = 'v5';
 const timeSliceSourceCacheVersion = 'v1';
 const aggregateCellInvalidationDefaultSizes = [20, 100, 250, 500, 750, 1000, 2500, 5000, 10000, 15000, 20000];
 const maxTimeSliceWindowCount = 10000;
@@ -32,6 +33,44 @@ const timeSliceUnitMillis = {
 };
 
 const normalizeMetricKey = ({ value, fallback = 'doseRate' }) => normalizePropKey({ value }) ?? fallback;
+
+const normalizePopupFieldKeys = ({ value }) => [...new Set(
+  toStringArray({ value })
+    .map((entry) => normalizePropKey({ value: entry }))
+    .filter(Boolean)
+)].sort();
+
+const aggregatePopupDataOnlyFieldKeys = new Set([
+  'comment',
+  'custom',
+  'deviceCalibration',
+  'deviceId',
+  'deviceName',
+  'deviceType',
+  'firmwareVersion',
+  'parsedTimeText',
+  'rawTimestamp',
+  'sourceReadingId'
+]);
+
+const getExpectedPopupMetricKeys = ({ filter }) => {
+  if (!filter.popupFieldKeysExplicit) {
+    return [];
+  }
+
+  return [...new Set(filter.popupFieldKeys
+    .map((propKey) => getAggregateTimeBasePropKey({ value: propKey }) ?? propKey)
+    .filter((propKey) => propKey !== 'occurredAt' && !aggregatePopupDataOnlyFieldKeys.has(propKey)))]
+    .sort();
+};
+
+const aggregateCellHasAnyMetricStats = ({ cell, metricKeys }) => metricKeys
+  .some((metricKey) => Object.prototype.hasOwnProperty.call(cell?.metrics ?? {}, metricKey));
+
+const aggregateCellsLookStaleForPopupMetrics = ({ cells, metricKeys }) => (
+  Boolean(metricKeys.length && cells.length)
+  && !cells.some((cell) => aggregateCellHasAnyMetricStats({ cell, metricKeys }))
+);
 
 const toTimestampMillis = ({ value }) => {
   if (!value) {
@@ -273,7 +312,9 @@ const toResultFilter = ({ filter }) => ({
   shape: filter.shape,
   cellSizeMeters: filter.cellSizeMeters,
   zoom: filter.zoom,
-  modeBucketDecimals: filter.modeBucketDecimals
+  modeBucketDecimals: filter.modeBucketDecimals,
+  popupFieldKeys: filter.popupFieldKeys,
+  popupFieldKeysExplicit: filter.popupFieldKeysExplicit
 });
 
 const normalizeFilterInput = ({ input }) => ({
@@ -305,7 +346,16 @@ const normalizeFilterInput = ({ input }) => ({
   shape: ['hexagon', 'square', 'circle'].includes(String(input?.shape)) ? String(input.shape) : 'hexagon',
   cellSizeMeters: coerceNumber({ value: input?.cellSizeMeters }) ?? null,
   zoom: coerceNumber({ value: input?.zoom }),
-  modeBucketDecimals: coerceNumber({ value: input?.modeBucketDecimals }) ?? null
+  modeBucketDecimals: coerceNumber({ value: input?.modeBucketDecimals }) ?? null,
+  popupFieldKeys: normalizePopupFieldKeys({
+    value: input?.popupFieldKeys ?? input?.popupFields ?? input?.popupMetricKeys
+  }),
+  popupFieldKeysExplicit: (
+    Object.prototype.hasOwnProperty.call(input ?? {}, 'popupFieldKeys')
+    || Object.prototype.hasOwnProperty.call(input ?? {}, 'popupFields')
+    || Object.prototype.hasOwnProperty.call(input ?? {}, 'popupMetricKeys')
+    || coerceBoolean({ value: input?.popupFieldKeysExplicit })
+  )
 });
 
 const roundCacheCoordinate = ({ value }) => Number(Number(value).toFixed(4));
@@ -621,16 +671,48 @@ const stripAggregateCellCacheInfo = ({ cell }) => {
   return rest;
 };
 
+const getRowPopupMetricValue = ({ row, metricKey }) => {
+  switch (metricKey) {
+    case 'occurredAt':
+      return toTimestampMillis({ value: row.occurred_at ?? row.received_at });
+    case 'latitude':
+      return row.latitude;
+    case 'longitude':
+      return row.longitude;
+    case 'altitudeMeters':
+      return row.altitude_meters;
+    case 'accuracy':
+      return row.accuracy;
+    default:
+      return row.measurements_json?.[metricKey];
+  }
+};
+
 const buildAggregateCellPayload = ({
   cell,
   rows,
   selectedMetric,
+  popupFieldKeys,
+  popupFieldKeysExplicit,
   popupStringFieldKeys,
   modeBucketDecimals
 }) => {
   const metricValues = [];
   const popupMetricValues = {};
   const popupDataValues = {};
+  const selectedPopupMetricKeys = popupFieldKeysExplicit || popupFieldKeys.length
+    ? new Set()
+    : null;
+  if (selectedPopupMetricKeys) {
+    for (const propKey of popupFieldKeys) {
+      const aggregateTimeBasePropKey = getAggregateTimeBasePropKey({ value: propKey });
+      if (aggregateTimeBasePropKey) {
+        selectedPopupMetricKeys.add(aggregateTimeBasePropKey);
+      } else if (propKey !== 'occurredAt') {
+        selectedPopupMetricKeys.add(propKey);
+      }
+    }
+  }
   let timeRangeStart = null;
   let timeRangeEnd = null;
 
@@ -643,15 +725,18 @@ const buildAggregateCellPayload = ({
       metricValues.push(metricValue);
     }
 
-    const popupMetrics = {
-      occurredAt: toTimestampMillis({ value: row.occurred_at ?? row.received_at }),
-      latitude: row.latitude,
-      longitude: row.longitude,
-      altitudeMeters: row.altitude_meters,
-      accuracy: row.accuracy,
-      ...(row.measurements_json ?? {})
-    };
-    for (const [metricKey, popupValue] of Object.entries(popupMetrics)) {
+    const popupMetricKeys = selectedPopupMetricKeys
+      ? [...selectedPopupMetricKeys]
+      : [
+          'occurredAt',
+          'latitude',
+          'longitude',
+          'altitudeMeters',
+          'accuracy',
+          ...Object.keys(row.measurements_json ?? {})
+        ];
+    for (const metricKey of popupMetricKeys) {
+      const popupValue = getRowPopupMetricValue({ row, metricKey });
       if (popupValue === null || popupValue === undefined) {
         continue;
       }
@@ -875,6 +960,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
   const resolveAggregateCellWithCacheInfo = async ({
     baseCell,
     cellCacheKey,
+    expectedPopupMetricKeys = [],
     refreshTtlOnRead = false,
     ttlSeconds,
     sourceOnWrite
@@ -886,15 +972,24 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
       refreshTtlOnRead
     });
     if (cachedCell) {
-      return {
-        ...cachedCell.value,
-        cache: {
-          hit: true,
-          key: cellCacheKey,
-          source: 'cache',
-          ttlSecondsRemaining: cachedCell.ttlSecondsRemaining
-        }
-      };
+      if (
+        !aggregateCellsLookStaleForPopupMetrics({
+          cells: [cachedCell.value],
+          metricKeys: expectedPopupMetricKeys
+        })
+      ) {
+        return {
+          ...cachedCell.value,
+          cache: {
+            hit: true,
+            key: cellCacheKey,
+            source: 'cache',
+            ttlSecondsRemaining: cachedCell.ttlSecondsRemaining
+          }
+        };
+      }
+
+      await cache.deleteKey({ key: cellCacheKey });
     }
 
     await cache.writeJson({
@@ -1993,6 +2088,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
     const cacheEnabled = prepared.historicalCacheEligible;
     const cacheEligibilityReason = getCacheEligibilityReason({ prepared });
     const cacheKeyDatasets = prepared.datasetIds.slice().sort().join(',') || 'none';
+    const expectedPopupMetricKeys = getExpectedPopupMetricKeys({ filter: prepared.filter });
     const cellCacheContext = cacheEnabled
       ? buildAggregateCellCacheContext({
           user,
@@ -2057,6 +2153,15 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
           cells: cached.value.cells,
           viewport: viewportFilter
         });
+        if (
+          aggregateCellsLookStaleForPopupMetrics({
+            cells: cached.value.cells,
+            metricKeys: expectedPopupMetricKeys
+          })
+        ) {
+          await cache.deleteKey({ key: cacheKey });
+          await cache.deletePattern({ pattern: cellCacheContext.invalidatePattern });
+        } else {
         logCacheFeature({
           caller: 'query::getAggregates.cache',
           correlationId,
@@ -2076,6 +2181,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
           cells: await Promise.all(visibleCells.map((cell) => resolveAggregateCellWithCacheInfo({
             baseCell: cell,
             cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
+            expectedPopupMetricKeys,
             refreshTtlOnRead: cellCacheRefreshTtlOnRead,
             ttlSeconds: historicalQueryCacheTtlSeconds,
             sourceOnWrite: 'cache'
@@ -2087,6 +2193,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
             ttlSecondsRemaining: cached.ttlSecondsRemaining
           })
         };
+        }
       }
     }
 
@@ -2155,9 +2262,14 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
       };
     }
 
+    const requestedPopupFieldKeys = new Set(prepared.filter.popupFieldKeys);
     const popupStringFieldKeys = [...new Set(
       rows.flatMap((row) => normalizeSupportedFields({ value: row.supported_fields_json })
         .filter((field) => field.valueType === 'string' && !isSyntheticPopupField({ propKey: field.propKey }))
+        .filter((field) => (
+          (!prepared.filter.popupFieldKeysExplicit && !requestedPopupFieldKeys.size)
+          || requestedPopupFieldKeys.has(field.propKey)
+        ))
         .map((field) => field.propKey))
     )];
 
@@ -2186,6 +2298,8 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
           cell,
           rows: cellRows,
           selectedMetric: prepared.filter.metric,
+          popupFieldKeys: prepared.filter.popupFieldKeys,
+          popupFieldKeysExplicit: prepared.filter.popupFieldKeysExplicit,
           popupStringFieldKeys,
           modeBucketDecimals
         });
@@ -2197,6 +2311,7 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
         return resolveAggregateCellWithCacheInfo({
           baseCell,
           cellCacheKey: cellCacheContext.buildKey({ cellId: cell.id }),
+          expectedPopupMetricKeys,
           refreshTtlOnRead: cellCacheRefreshTtlOnRead,
           ttlSeconds: historicalQueryCacheTtlSeconds,
           sourceOnWrite: 'computed'

@@ -205,6 +205,7 @@ export const createDatasetService = ({ db, audit }) => {
       `SELECT
          d.id AS dataset_id,
          d.name AS dataset_name,
+         ${datasetAccessCase({ roleParamIndex: 1, userParamIndex: 2 })} AS access_level,
          log.id AS datalog_id,
          log.datalog_name,
          log.supported_fields_json
@@ -218,8 +219,11 @@ export const createDatasetService = ({ db, audit }) => {
     const byPropKey = new Map();
 
     for (const row of result.rows) {
+      const supportedFields = normalizeSupportedFields({
+        value: row.supported_fields_json
+      });
       for (const field of mergePopupFields({
-        supportedFields: row.supported_fields_json
+        supportedFields
       })) {
         const current = byPropKey.get(field.propKey) ?? {
           propKey: field.propKey,
@@ -240,7 +244,11 @@ export const createDatasetService = ({ db, audit }) => {
           name: row.datalog_name,
           datasetId: row.dataset_id,
           datasetName: row.dataset_name,
-          displayName: field.displayName
+          displayName: field.displayName,
+          editable: row.access_level === 'edit',
+          popupDefaultEnabled: field.popupDefaultEnabled,
+          metricListEnabled: field.metricListEnabled,
+          supportedFields
         });
         byPropKey.set(field.propKey, current);
       }

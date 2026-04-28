@@ -1181,14 +1181,27 @@
 
   .supported-field-row {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(9rem, auto) auto auto;
+    grid-template-columns: minmax(12rem, 1fr) minmax(12rem, 1fr) minmax(9rem, 0.72fr) max-content auto;
     gap: var(--space-3);
     align-items: end;
+  }
+
+  .supported-field-row > label {
+    display: grid;
+    gap: var(--space-2);
+    align-self: end;
+  }
+
+  .supported-field-row > label input,
+  .supported-field-row > label select {
+    width: 100%;
   }
 
   .supported-field-actions {
     display: flex;
     align-items: end;
+    align-self: end;
+    justify-self: start;
     gap: var(--space-2);
   }
 
@@ -1198,6 +1211,11 @@
     gap: var(--space-2);
     white-space: nowrap;
     justify-self: start;
+  }
+
+  .supported-field-toggle input[type='checkbox'] {
+    flex: 0 0 auto;
+    width: auto;
   }
 
   .supported-field-toggle-group {
