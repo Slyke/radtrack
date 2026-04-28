@@ -598,6 +598,8 @@
 
   .map-cell-points-index-heading,
   .map-cell-points-index-cell {
+    padding-inline-start: 0.1rem;
+    padding-inline-end: 0.55rem;
     color: var(--color-text-muted);
     font-variant-numeric: tabular-nums;
     text-align: right;
@@ -609,7 +611,7 @@
   }
 
   .map-cell-points-index-value {
-    min-width: 2.25rem;
+    min-width: 1.2rem;
     color: inherit;
   }
 

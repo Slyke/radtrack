@@ -69,7 +69,7 @@ Default deployment runs them separately. Monolith mode lets the API serve the bu
 - Aggregate shapes support square, circle, and hex layouts.
 - Aggregate mode computes min, max, mean, median, rounded-bucket mode, and count.
 - Aggregate cells are cached independently from viewport query caches so the same cell can be reused across nearby viewport/hash changes.
-- Future live-point invalidation can target aggregate cells directly through `queryService.invalidateAggregateCellsForPoint(...)`, while still clearing broader viewport caches for affected datasets.
+- Live-point invalidation targets raw-point caches plus affected aggregate cell/query caches so the next map refresh recomputes dirty cells.
 
 ## Permission Model
 

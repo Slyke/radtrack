@@ -16,6 +16,7 @@ export interface UiConfig {
   defaultAggregateShape: string;
   defaultCellSizeMeters: number;
   rawPointCap: number;
+  liveUpdatePollingIntervalSeconds: number;
   modeBucketDecimals: number;
   cacheTtlSeconds: number;
 }

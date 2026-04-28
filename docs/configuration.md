@@ -33,6 +33,7 @@ Mutable non-secret settings are seeded from bootstrap files into Postgres and th
 - default aggregation shape
 - aggregate mode bucket precision
 - raw point cap
+- live update polling interval seconds
 - Redis cache TTL seconds
 - map tile URL template and attribution
 

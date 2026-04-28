@@ -5,7 +5,7 @@
   import { onDestroy, onMount, untrack } from 'svelte';
   import LeafletMap from '$lib/components/LeafletMap.svelte';
   import MapAggregatePointsModal from '$lib/components/MapAggregatePointsModal.svelte';
-  import { apiFetch } from '$lib/api/client';
+  import { apiFetch, resolveApiWebSocketPath } from '$lib/api/client';
   import {
     aggregateDataCountPropKey,
     getAggregateTimeBasePropKey,
@@ -233,11 +233,23 @@
     high: number;
   };
 
+  type LiveUpdateEnvelope = {
+    type: 'ready' | 'subscribed' | 'updates-available' | 'error';
+    currentCursor?: number;
+    currentPublishedAt?: string;
+    latestCursor?: number;
+    latestPublishedAt?: string;
+    updateCount?: number;
+    reason?: string;
+  };
+
   const autoUpdateDebounceMs = 450;
   const autoUpdateStorageKeyPrefix = 'radtrack.map.auto-update';
   const autoCellSizeStorageKeyPrefix = 'radtrack.map.auto-cell-size';
   const basemapStorageKeyPrefix = 'radtrack.map.basemap';
   const filterUrlParamName = 'filters';
+  const liveUpdatesReconnectDelayMs = 5000;
+  const liveUpdatesStorageKeyPrefix = 'radtrack.map.live-updates';
   const mapLatUrlParamName = 'lat';
   const mapLonUrlParamName = 'lon';
   const mapZoomUrlParamName = 'z';
@@ -372,6 +384,23 @@
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : null;
   };
+
+  const toLiveUpdateCursor = (value: unknown) => {
+    const parsed = toFiniteNumber(value);
+    return Number.isInteger(parsed) && parsed !== null && parsed >= 0 ? parsed : null;
+  };
+
+  const maxLiveUpdateCursor = (...values: Array<number | null>) => values.reduce<number | null>((highest, current) => {
+    if (current === null) {
+      return highest;
+    }
+
+    if (highest === null || current > highest) {
+      return current;
+    }
+
+    return highest;
+  }, null);
 
   const padDatePart = (value: number) => String(value).padStart(2, '0');
 
@@ -787,6 +816,10 @@
   let loading = $state(false);
   let lookupsReady = $state(false);
   let autoUpdateMap = $state(true);
+  let liveUpdatesEnabled = $state(true);
+  let liveUpdateCursor = $state<number | null>(null);
+  let liveUpdatePendingCursor = $state<number | null>(null);
+  let liveUpdateTransport = $state<'idle' | 'polling' | 'websocket'>('idle');
   let selectedPoint = $state<MapPoint | null>(null);
   let aggregateCellModalState = $state<AggregateCellModalState | null>(null);
   let aggregateCellModalPoints = $state<MapPoint[]>([]);
@@ -816,6 +849,13 @@
   let sidebarUpdateTimer: ReturnType<typeof setTimeout> | null = null;
   let mapStageElement: HTMLDivElement;
   let mapStageResizeObserver: ResizeObserver | null = null;
+  let liveUpdateSocket: WebSocket | null = null;
+  let liveUpdateSocketSubscriptionKey = '';
+  let liveUpdateSocketReady = false;
+  let liveUpdateReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let liveUpdateTimer: ReturnType<typeof setInterval> | null = null;
+  let liveUpdateRefreshInFlight = false;
+  let liveUpdateRefreshQueued = false;
   let queuedSidebarSnapshot: {
     query: MapQuerySnapshot;
     popupState: PopupStateSnapshot;
@@ -1204,10 +1244,11 @@
       return responseCache ?? undefined;
     }
 
-    return normalizedCellCache.ttlSecondsRemaining === null && responseCache?.ttlSecondsRemaining !== null
+    const responseCacheTtlSecondsRemaining = responseCache?.ttlSecondsRemaining ?? null;
+    return normalizedCellCache.ttlSecondsRemaining === null && responseCacheTtlSecondsRemaining !== null
       ? {
           ...normalizedCellCache,
-          ttlSecondsRemaining: responseCache.ttlSecondsRemaining
+          ttlSecondsRemaining: responseCacheTtlSecondsRemaining
         }
       : normalizedCellCache;
   };
@@ -1482,6 +1523,10 @@
   const loadMapPreferences = () => {
     autoUpdateMap = loadStoredBoolean({
       prefix: autoUpdateStorageKeyPrefix,
+      fallbackValue: true
+    });
+    liveUpdatesEnabled = loadStoredBoolean({
+      prefix: liveUpdatesStorageKeyPrefix,
       fallbackValue: true
     });
     const encodedUrlFilters = loadUrlFilters();
@@ -2037,22 +2082,23 @@
     )));
   const enabledPopupFieldCount = $derived.by(() => visiblePopupFields.length);
   const aggregateCellModalCurrentCell = $derived.by(() => {
-    if (!aggregateCellModalState || !activeQuery || activeQuery.key !== aggregateCellModalState.queryKey) {
+    const modalState = aggregateCellModalState;
+    if (!modalState || !activeQuery || activeQuery.key !== modalState.queryKey) {
       return null;
     }
 
     if (
       activeMode !== 'aggregate'
-      || activeShape !== aggregateCellModalState.shape
+      || activeShape !== modalState.shape
       || getAppliedCellSizeMeters({
         filters: activeQuery.filters,
         viewport: activeQuery.viewport
-      }) !== aggregateCellModalState.cellSizeMeters
+      }) !== modalState.cellSizeMeters
     ) {
       return null;
     }
 
-    return aggregates.find((cell) => cell.id === aggregateCellModalState.cellId) ?? null;
+    return aggregates.find((cell) => cell.id === modalState.cellId) ?? null;
   });
   const aggregateCellModalDisplayCell = $derived.by(() => (
     aggregateCellModalCurrentCell
@@ -2246,6 +2292,31 @@
       || filters.forceRecheck
     )
   ));
+  const liveUpdatePollingIntervalMs = $derived.by(() => Math.max(
+    5000,
+    (Math.max(1, Math.trunc(toFiniteNumber($sessionStore.ui?.liveUpdatePollingIntervalSeconds) ?? 15))) * 1000
+  ));
+  const liveUpdatesAllowed = $derived.by(() => filters.timeFilterMode !== 'absolute');
+  const liveUpdatesActive = $derived.by(() => (
+    browser
+    && lookupsReady
+    && Boolean(activeQuery)
+    && liveUpdatesEnabled
+    && liveUpdatesAllowed
+  ));
+  const liveUpdateStatusLabel = $derived.by(() => {
+    if (!liveUpdatesAllowed) {
+      return t('radtrack-map_live_updates_disabled_absolute-label');
+    }
+
+    if (!liveUpdatesEnabled) {
+      return t('radtrack-map_live_updates_off-label');
+    }
+
+    return liveUpdateTransport === 'websocket'
+      ? t('radtrack-map_live_updates_websocket-label')
+      : t('radtrack-map_live_updates_polling-label');
+  });
 
   const clearScheduledSidebarUpdate = () => {
     if (!sidebarUpdateTimer) {
@@ -2341,6 +2412,276 @@
     applyExcludeAreas: snapshot.filters.applyExcludeAreas,
     ...buildTimeFilterQuery({ sourceFilters: snapshot.filters })
   });
+
+  const buildLiveUpdateQuery = ({
+    snapshot,
+    sinceCursor
+  }: {
+    snapshot: MapQuerySnapshot;
+    sinceCursor: number | null;
+  }) => ({
+    ...buildBaseQuery({ snapshot }),
+    sinceCursor
+  });
+
+  const clearLiveUpdateReconnectTimer = () => {
+    if (!liveUpdateReconnectTimer) {
+      return;
+    }
+
+    clearTimeout(liveUpdateReconnectTimer);
+    liveUpdateReconnectTimer = null;
+  };
+
+  const clearLiveUpdateTimer = () => {
+    if (!liveUpdateTimer) {
+      return;
+    }
+
+    clearInterval(liveUpdateTimer);
+    liveUpdateTimer = null;
+  };
+
+  const closeLiveUpdateSocket = ({ resetTransport = true }: { resetTransport?: boolean } = {}) => {
+    liveUpdateSocketReady = false;
+    liveUpdateSocketSubscriptionKey = '';
+
+    if (!liveUpdateSocket) {
+      if (resetTransport) {
+        liveUpdateTransport = 'idle';
+      }
+      return;
+    }
+
+    const socket = liveUpdateSocket;
+    liveUpdateSocket = null;
+    socket.onopen = null;
+    socket.onmessage = null;
+    socket.onerror = null;
+    socket.onclose = null;
+    if (socket.readyState === WebSocket.CONNECTING || socket.readyState === WebSocket.OPEN) {
+      socket.close();
+    }
+
+    if (resetTransport) {
+      liveUpdateTransport = 'idle';
+    }
+  };
+
+  const teardownLiveUpdates = () => {
+    clearLiveUpdateReconnectTimer();
+    clearLiveUpdateTimer();
+    closeLiveUpdateSocket();
+    liveUpdatePendingCursor = null;
+    liveUpdateRefreshQueued = false;
+    liveUpdateRefreshInFlight = false;
+  };
+
+  const scheduleLiveUpdateReconnect = () => {
+    if (!liveUpdatesActive || liveUpdateReconnectTimer || liveUpdateSocket) {
+      return;
+    }
+
+    liveUpdateReconnectTimer = setTimeout(() => {
+      liveUpdateReconnectTimer = null;
+      openLiveUpdateSocket();
+    }, liveUpdatesReconnectDelayMs);
+  };
+
+  const sendLiveUpdateSubscription = ({ force = false }: { force?: boolean } = {}) => {
+    if (
+      !liveUpdateSocket
+      || liveUpdateSocket.readyState !== WebSocket.OPEN
+      || !liveUpdateSocketReady
+      || !activeQuery
+      || !liveUpdatesActive
+    ) {
+      return;
+    }
+
+    if (!force && liveUpdateSocketSubscriptionKey === activeQuery.key) {
+      return;
+    }
+
+    liveUpdateSocket.send(JSON.stringify({
+      type: 'subscribe',
+      sinceCursor: liveUpdateCursor,
+      filters: buildBaseQuery({ snapshot: activeQuery })
+    }));
+    liveUpdateSocketSubscriptionKey = activeQuery.key;
+  };
+
+  const createLiveRefreshSnapshot = () => {
+    if (!activeQuery) {
+      return null;
+    }
+
+    return getCurrentQuerySnapshot({
+      filters: {
+        ...cloneFilters(activeQuery.filters, { clearOneShotControls: true }),
+        forceRecheck: true
+      },
+      viewport: activeQuery.viewport
+    });
+  };
+
+  const triggerLiveUpdateRefresh = async () => {
+    if (!activeQuery || !liveUpdatesActive) {
+      return;
+    }
+
+    if (loading || liveUpdateRefreshInFlight) {
+      liveUpdateRefreshQueued = true;
+      return;
+    }
+
+    liveUpdateRefreshInFlight = true;
+    try {
+      do {
+        liveUpdateRefreshQueued = false;
+        const refreshSnapshot = createLiveRefreshSnapshot();
+        if (!refreshSnapshot) {
+          return;
+        }
+
+        const refreshedCursor = await loadMapData({
+          popupState: getAppliedPopupStateSnapshot(),
+          snapshot: refreshSnapshot,
+          preserveSelectedPoint: true
+        });
+        if (refreshedCursor === null) {
+          return;
+        }
+
+        liveUpdateCursor = refreshedCursor;
+        if (liveUpdatePendingCursor !== null && liveUpdatePendingCursor <= refreshedCursor) {
+          liveUpdatePendingCursor = null;
+        }
+      } while (
+        liveUpdateRefreshQueued
+        || (liveUpdatePendingCursor !== null && liveUpdateCursor !== null && liveUpdatePendingCursor > liveUpdateCursor)
+      );
+    } finally {
+      liveUpdateRefreshInFlight = false;
+    }
+  };
+
+  const handleLiveUpdateMessage = ({ payload }: { payload: LiveUpdateEnvelope }) => {
+    if (payload.type === 'ready' || payload.type === 'subscribed') {
+      const currentCursor = toLiveUpdateCursor(payload.currentCursor);
+      if (liveUpdateCursor === null && currentCursor !== null) {
+        liveUpdateCursor = currentCursor;
+      }
+
+      if (payload.type === 'ready') {
+        liveUpdateSocketReady = true;
+        sendLiveUpdateSubscription({ force: true });
+      }
+      return;
+    }
+
+    if (payload.type === 'updates-available') {
+      liveUpdatePendingCursor = maxLiveUpdateCursor(
+        liveUpdatePendingCursor,
+        toLiveUpdateCursor(payload.latestCursor)
+      );
+      void triggerLiveUpdateRefresh();
+    }
+  };
+
+  const openLiveUpdateSocket = () => {
+    if (!browser || !liveUpdatesActive || liveUpdateSocket) {
+      return;
+    }
+
+    try {
+      const socket = new WebSocket(resolveApiWebSocketPath({ path: '/api/map/live-updates/ws' }));
+      liveUpdateSocket = socket;
+      liveUpdateTransport = 'polling';
+
+      socket.onopen = () => {
+        if (liveUpdateSocket !== socket) {
+          return;
+        }
+
+        clearLiveUpdateReconnectTimer();
+        liveUpdateTransport = 'websocket';
+      };
+
+      socket.onmessage = (event) => {
+        if (liveUpdateSocket !== socket) {
+          return;
+        }
+
+        try {
+          handleLiveUpdateMessage({
+            payload: JSON.parse(String(event.data))
+          });
+        } catch {
+          liveUpdateTransport = 'polling';
+        }
+      };
+
+      socket.onerror = () => {
+        if (liveUpdateSocket !== socket) {
+          return;
+        }
+
+        liveUpdateTransport = 'polling';
+      };
+
+      socket.onclose = () => {
+        if (liveUpdateSocket !== socket) {
+          return;
+        }
+
+        liveUpdateSocket = null;
+        liveUpdateSocketReady = false;
+        liveUpdateSocketSubscriptionKey = '';
+        if (liveUpdatesActive) {
+          liveUpdateTransport = 'polling';
+          scheduleLiveUpdateReconnect();
+          return;
+        }
+
+        liveUpdateTransport = 'idle';
+      };
+    } catch {
+      liveUpdateTransport = 'polling';
+      scheduleLiveUpdateReconnect();
+    }
+  };
+
+  const pollLiveUpdates = async () => {
+    if (!activeQuery || !liveUpdatesActive || activeQuery.filters.timeFilterMode === 'relative') {
+      return;
+    }
+
+    try {
+      const response = await apiFetch<any>({
+        path: '/api/map/live-updates',
+        query: buildLiveUpdateQuery({
+          snapshot: activeQuery,
+          sinceCursor: liveUpdateCursor
+        })
+      });
+      const status = response.result ?? {};
+      const currentCursor = toLiveUpdateCursor(status.currentCursor);
+      if (status.hasUpdates) {
+        liveUpdatePendingCursor = maxLiveUpdateCursor(
+          liveUpdatePendingCursor,
+          toLiveUpdateCursor(status.latestCursor),
+          currentCursor
+        );
+        void triggerLiveUpdateRefresh();
+        return;
+      }
+
+      liveUpdateCursor = maxLiveUpdateCursor(liveUpdateCursor, currentCursor);
+    } catch {
+      liveUpdateTransport = liveUpdatesActive ? 'polling' : 'idle';
+    }
+  };
 
   const closeAggregateCellModal = () => {
     aggregateCellModalRequestVersion += 1;
@@ -2637,18 +2978,24 @@
 
   const loadMapData = async ({
     popupState = getAppliedPopupStateSnapshot(),
-    snapshot = getCurrentQuerySnapshot()
+    snapshot = getCurrentQuerySnapshot(),
+    preserveSelectedPoint = false
   }: {
     popupState?: PopupStateSnapshot;
     snapshot?: MapQuerySnapshot;
+    preserveSelectedPoint?: boolean;
   } = {}) => {
     const requestId = ++requestVersion;
     let completedSuccessfully = false;
+    let responseLiveUpdateCursor: number | null = null;
+    const preservedSelectedPointId = preserveSelectedPoint ? selectedPoint?.id ?? null : null;
     const query = buildBaseQuery({ snapshot });
 
     loading = true;
     errorMessage = null;
-    selectedPoint = null;
+    if (!preserveSelectedPoint) {
+      selectedPoint = null;
+    }
 
     try {
       if (snapshot.filters.mode === 'raw') {
@@ -2658,13 +3005,17 @@
         });
 
         if (requestId !== requestVersion) {
-          return;
+          return null;
         }
 
+        responseLiveUpdateCursor = toLiveUpdateCursor(response.result?.liveUpdates?.currentCursor);
         points = response.result.points;
         aggregates = [];
+        if (preservedSelectedPointId) {
+          selectedPoint = response.result.points.find((point: MapPoint) => point.id === preservedSelectedPointId) ?? null;
+        }
         completedSuccessfully = true;
-        return;
+        return responseLiveUpdateCursor;
       }
 
       const response = await apiFetch<any>({
@@ -2678,10 +3029,12 @@
       });
 
       if (requestId !== requestVersion) {
-        return;
+        return null;
       }
 
+      responseLiveUpdateCursor = toLiveUpdateCursor(response.result?.liveUpdates?.currentCursor);
       points = [];
+      selectedPoint = null;
       const responseCache = normalizeAggregateCache({ value: response.result.cache });
       aggregates = response.result.cells.map((cell: AggregateCell) => ({
         ...cell,
@@ -2693,16 +3046,19 @@
       completedSuccessfully = true;
     } catch (error) {
       if (requestId !== requestVersion) {
-        return;
+        return null;
       }
 
       errorMessage = error instanceof Error ? error.message : t('radtrack-map_failed');
     } finally {
       if (requestId !== requestVersion) {
-        return;
+        return null;
       }
 
       if (completedSuccessfully) {
+        if (responseLiveUpdateCursor !== null) {
+          liveUpdateCursor = responseLiveUpdateCursor;
+        }
         activeQuery = {
           ...snapshot,
           filters: cloneAppliedFilters(snapshot.filters, { clearOneShotControls: true })
@@ -2731,6 +3087,8 @@
         });
       }
     }
+
+    return completedSuccessfully ? responseLiveUpdateCursor : null;
   };
 
   const loadTracksForDatasets = async ({ datasetIds }: { datasetIds: string[] }) => {
@@ -2882,6 +3240,24 @@
     scheduleSidebarAutoUpdate();
   };
 
+  const handleLiveUpdatesToggle = () => {
+    if (!liveUpdatesAllowed && liveUpdatesEnabled) {
+      liveUpdatesEnabled = false;
+    }
+
+    persistBoolean({
+      prefix: liveUpdatesStorageKeyPrefix,
+      value: liveUpdatesEnabled
+    });
+
+    if (!liveUpdatesEnabled) {
+      teardownLiveUpdates();
+      return;
+    }
+
+    liveUpdateTransport = liveUpdateSocket?.readyState === WebSocket.OPEN ? 'websocket' : 'polling';
+  };
+
   const handleAutoCellSizeToggle = () => {
     if (!filters.autoCellSize) {
       filters = {
@@ -2982,6 +3358,7 @@
   onDestroy(() => {
     mapStageResizeObserver?.disconnect();
     clearScheduledSidebarUpdate();
+    teardownLiveUpdates();
   });
 
   $effect(() => {
@@ -3057,6 +3434,65 @@
   });
 
   $effect(() => {
+    if (filters.timeFilterMode !== 'absolute' || !liveUpdatesEnabled) {
+      return;
+    }
+
+    liveUpdatesEnabled = false;
+    persistBoolean({
+      prefix: liveUpdatesStorageKeyPrefix,
+      value: false
+    });
+  });
+
+  $effect(() => {
+    const active = liveUpdatesActive;
+    const snapshotKey = activeQuery?.key ?? '';
+    const intervalMs = liveUpdatePollingIntervalMs;
+
+    clearLiveUpdateTimer();
+
+    if (!browser || !active || !snapshotKey) {
+      teardownLiveUpdates();
+      return;
+    }
+
+    if (!liveUpdateSocket) {
+      openLiveUpdateSocket();
+    } else if (liveUpdateSocket.readyState === WebSocket.OPEN && liveUpdateSocketReady) {
+      sendLiveUpdateSubscription();
+    }
+
+    liveUpdateTransport = liveUpdateSocket?.readyState === WebSocket.OPEN ? 'websocket' : 'polling';
+    liveUpdateTimer = setInterval(() => {
+      if (!activeQuery || !liveUpdatesActive) {
+        return;
+      }
+
+      if (activeQuery.filters.timeFilterMode === 'relative') {
+        void triggerLiveUpdateRefresh();
+        return;
+      }
+
+      if (!liveUpdateSocket || liveUpdateSocket.readyState !== WebSocket.OPEN) {
+        void pollLiveUpdates();
+      }
+    }, intervalMs);
+
+    return () => {
+      clearLiveUpdateTimer();
+    };
+  });
+
+  $effect(() => {
+    if (loading || !liveUpdatesActive || !liveUpdateRefreshQueued || liveUpdateRefreshInFlight) {
+      return;
+    }
+
+    void triggerLiveUpdateRefresh();
+  });
+
+  $effect(() => {
     const selectedDatasetIds = [...filters.datasetIds];
     if (!selectedDatasetIds.length) {
       return;
@@ -3120,6 +3556,20 @@
           <input bind:checked={autoUpdateMap} onchange={handleAutoUpdateToggle} type="checkbox" />
           <span>{t('radtrack-map_auto_update-label')}</span>
         </label>
+
+        <label class="checkbox-field map-live-updates">
+          <input
+            bind:checked={liveUpdatesEnabled}
+            disabled={!liveUpdatesAllowed}
+            onchange={handleLiveUpdatesToggle}
+            type="checkbox"
+          />
+          <span>{t('radtrack-map_live_updates-label')}</span>
+          <span class="chip subtle">{liveUpdateStatusLabel}</span>
+        </label>
+        {#if !liveUpdatesAllowed}
+          <p class="muted map-live-updates-note">{t('radtrack-map_live_updates_absolute_note-label')}</p>
+        {/if}
 
         <div class="form-grid">
           <div class="selector-accordion-stack">
@@ -3811,6 +4261,15 @@
 
   .map-auto-update {
     margin-bottom: var(--space-4);
+  }
+
+  .map-live-updates {
+    grid-template-columns: auto 1fr auto;
+    margin-bottom: var(--space-1);
+  }
+
+  .map-live-updates-note {
+    margin: 0 0 var(--space-4);
   }
 
   .field-group {

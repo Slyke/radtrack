@@ -225,7 +225,11 @@ export const loadRuntimeConfig = async ({ correlationId = null } = {}) => {
       defaultMetric: typeof rawConfig?.map?.defaultMetric === 'string' ? rawConfig.map.defaultMetric : 'doseRate',
       defaultAggregateShape: typeof rawConfig?.map?.defaultAggregateShape === 'string' ? rawConfig.map.defaultAggregateShape : 'hexagon',
       defaultCellSizeMeters: asInteger({ value: rawConfig?.map?.defaultCellSizeMeters, fallback: 250 }),
-      rawPointCap: asInteger({ value: rawConfig?.map?.rawPointCap, fallback: 5000 })
+      rawPointCap: asInteger({ value: rawConfig?.map?.rawPointCap, fallback: 5000 }),
+      liveUpdatePollingIntervalSeconds: asInteger({
+        value: rawConfig?.map?.liveUpdatePollingIntervalSeconds,
+        fallback: 15
+      })
     },
     aggregation: {
       modeBucketDecimals: asInteger({ value: rawConfig?.aggregation?.modeBucketDecimals, fallback: 2 }),

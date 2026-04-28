@@ -959,6 +959,122 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
     return nextRows;
   };
 
+  const getLiveUpdateMetricValue = ({ point, metricKey }) => {
+    if (metricKey === 'occurredAt') {
+      return toTimestampMillis({ value: point.occurredAt ?? point.receivedAt });
+    }
+
+    switch (metricKey) {
+      case 'latitude':
+        return point.latitude;
+      case 'longitude':
+        return point.longitude;
+      case 'accuracy':
+        return point.accuracy;
+      case 'altitudeMeters':
+        return point.altitudeMeters;
+      default:
+        return point.measurements?.[metricKey] ?? null;
+    }
+  };
+
+  const pointMatchesLiveUpdateFilter = ({
+    datasetIds,
+    filter,
+    point,
+    hardRemoveExcludeAreas
+  }) => {
+    if (!point || typeof point !== 'object') {
+      return false;
+    }
+
+    if (!datasetIds.includes(point.datasetId)) {
+      return false;
+    }
+
+    if (
+      filter.datalogSelectionMode === 'include'
+      && !filter.datalogIds.includes(point.datalogId)
+    ) {
+      return false;
+    }
+
+    const hasCoordinates = Number.isFinite(point.latitude) && Number.isFinite(point.longitude);
+    if (filter.requireCoordinates && !hasCoordinates) {
+      return false;
+    }
+
+    const pointTimestamp = point.occurredAt ?? point.receivedAt ?? null;
+    if (filter.dateFrom && (!pointTimestamp || pointTimestamp < filter.dateFrom)) {
+      return false;
+    }
+
+    if (filter.dateTo && (!pointTimestamp || pointTimestamp > filter.dateTo)) {
+      return false;
+    }
+
+    const metricValue = getLiveUpdateMetricValue({
+      point,
+      metricKey: filter.metric
+    });
+    if (filter.metricMin !== null && (metricValue === null || metricValue < filter.metricMin)) {
+      return false;
+    }
+
+    if (filter.metricMax !== null && (metricValue === null || metricValue > filter.metricMax)) {
+      return false;
+    }
+
+    if (
+      (
+        filter.minLat !== null
+        || filter.maxLat !== null
+        || filter.minLon !== null
+        || filter.maxLon !== null
+        || hardRemoveExcludeAreas.length
+      )
+      && !hasCoordinates
+    ) {
+      return false;
+    }
+
+    if (filter.minLat !== null && point.latitude < filter.minLat) {
+      return false;
+    }
+
+    if (filter.maxLat !== null && point.latitude > filter.maxLat) {
+      return false;
+    }
+
+    if (filter.minLon !== null && filter.maxLon !== null) {
+      const longitudeViewport = buildLongitudeViewport({
+        minLon: filter.minLon,
+        maxLon: filter.maxLon
+      });
+      if (
+        longitudeViewport
+        && !longitudeViewport.spansWorld
+        && !longitudeViewport.ranges.some((range) => (
+          point.longitude >= range.minLon
+          && point.longitude <= range.maxLon
+        ))
+      ) {
+        return false;
+      }
+    }
+
+    return !hardRemoveExcludeAreas.some((area) => (
+      area.datasetId === point.datasetId
+      && pointIsInsideExcludeArea({
+        area,
+        point: {
+          latitude: point.latitude,
+          longitude: point.longitude
+        }
+      })
+    ));
+  };
+
   const prepareResolvedFilter = async ({
     user,
     input,
@@ -1765,12 +1881,64 @@ export const createQueryService = ({ db, cache, logger, runtimeConfig, settingsS
     }
   };
 
+  const invalidateLivePoint = async ({
+    datasetIds,
+    point
+  }) => {
+    if (!Array.isArray(datasetIds) || !datasetIds.length || !point) {
+      return;
+    }
+
+    for (const datasetId of datasetIds) {
+      await cache.deletePattern({ pattern: `raw-points:*${datasetId}*` });
+      await cache.deletePattern({ pattern: `aggregate:*${datasetId}*` });
+    }
+
+    await invalidateAggregateCellsForPoint({
+      datasetIds,
+      point
+    });
+  };
+
+  const createLiveUpdateMatcher = async ({
+    user,
+    input,
+    correlationId = null
+  }) => {
+    const prepared = await prepareResolvedFilter({
+      user,
+      input,
+      correlationId
+    });
+    const hardRemoveExcludeAreas = prepared.filter.applyExcludeAreas
+      ? (await loadExcludeAreas({ datasetIds: prepared.datasetIds }))
+          .filter((entry) => (entry.effectType ?? 'hard_remove') === 'hard_remove')
+      : [];
+
+    return {
+      matches: ({ point }) => {
+        if (prepared.shortCircuit) {
+          return false;
+        }
+
+        return pointMatchesLiveUpdateFilter({
+          datasetIds: prepared.datasetIds,
+          filter: prepared.filter,
+          point,
+          hardRemoveExcludeAreas
+        });
+      }
+    };
+  };
+
   return {
+    createLiveUpdateMatcher,
     fetchFilteredRows,
     getRawPoints,
     getAggregateCellPoints,
     getAggregates,
     invalidateDatasets,
-    invalidateAggregateCellsForPoint
+    invalidateAggregateCellsForPoint,
+    invalidateLivePoint
   };
 };

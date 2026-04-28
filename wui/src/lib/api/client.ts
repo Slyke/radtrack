@@ -16,6 +16,12 @@ export class ApiError extends Error {
 
 export const resolveApiPath = ({ path }: { path: string }) => `${API_BASE}${path}`;
 
+export const resolveApiWebSocketPath = ({ path }: { path: string }) => {
+  const url = new URL(resolveApiPath({ path }), window.location.href);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.toString();
+};
+
 const parseBody = async ({ response }: { response: Response }) => {
   const contentType = response.headers.get('content-type') ?? '';
   if (contentType.includes('application/json')) {

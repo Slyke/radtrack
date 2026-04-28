@@ -2110,13 +2110,14 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
       });
     } catch (error) {
       if (error?.code === '23505' && error?.constraint === 'idx_readings_datalog_source_reading_id') {
+        const duplicateDatalog = (await db.query(
+          `SELECT id, dataset_id
+           FROM datalogs
+           WHERE ingest_datalog_id = $1`,
+          [normalizedDatalogId]
+        )).rows[0] ?? null;
         const duplicateReading = await loadDuplicateIngestReading({
-          datalogId: (await db.query(
-            `SELECT id
-             FROM datalogs
-             WHERE ingest_datalog_id = $1`,
-            [normalizedDatalogId]
-          )).rows[0]?.id ?? '',
+          datalogId: duplicateDatalog?.id ?? '',
           sourceReadingId: asTrimmedString({
             value: storedComponents.sourceReadingId,
             field: 'sourceReadingId',
@@ -2129,6 +2130,8 @@ export const createDatalogService = ({ db, audit, datasetService }) => {
 
         return {
           duplicate: true,
+          datalogId: duplicateDatalog?.id ?? null,
+          datasetId: duplicateDatalog?.dataset_id ?? null,
           reading: duplicateReading
         };
       }

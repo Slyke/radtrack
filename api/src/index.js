@@ -17,6 +17,7 @@ import { createDatasetService } from './services/datasets.js';
 import { createDatalogService } from './services/datalogs.js';
 import { createQueryService } from './services/query.js';
 import { createExportService } from './services/export.js';
+import { createLiveUpdateService } from './services/live-updates.js';
 import { canModerateUsers, canManageSystem, ensureRole } from './services/permissions.js';
 import { createCorrelationId } from './utils/ids.js';
 import { ensureSameOrigin, getSourceIp, requireJsonBodyObject } from './utils/http.js';
@@ -61,6 +62,41 @@ const invalidateDatasetsSafely = async ({
       errorKey: 'CACHE_FAILED',
       context: {
         datasetIds,
+        ...(context ?? {})
+      },
+      rootCause: cause
+    });
+  }
+};
+
+const invalidateLivePointSafely = async ({
+  logger,
+  queryService,
+  datasetIds,
+  point,
+  correlationId,
+  caller,
+  reason = 'Failed invalidating live point cache.',
+  context = null
+}) => {
+  if (!Array.isArray(datasetIds) || !datasetIds.length || !point) {
+    return;
+  }
+
+  try {
+    await queryService.invalidateLivePoint({
+      datasetIds,
+      point
+    });
+  } catch (cause) {
+    logger.warn({
+      caller,
+      message: reason,
+      correlationId,
+      errorKey: 'CACHE_FAILED',
+      context: {
+        datasetIds,
+        pointId: point.id ?? null,
         ...(context ?? {})
       },
       rootCause: cause
@@ -180,6 +216,7 @@ const main = async () => {
   const datalogService = createDatalogService({ db, audit, datasetService });
   const queryService = createQueryService({ db, cache, logger, runtimeConfig, settingsService, datasetService });
   const exportService = createExportService({ db, queryService, settingsService });
+  let liveUpdateService = null;
 
   await settingsService.seedRuntimeSettings({ correlationId: startupCorrelationId });
   await authService.bootstrapAdmin({ correlationId: startupCorrelationId });
@@ -333,17 +370,36 @@ const main = async () => {
       input: body,
       correlationId: req.correlationId
     });
-    await invalidateDatasetsSafely({
-      logger,
-      queryService,
-      datasetIds: [result.datasetId],
-      correlationId: req.correlationId,
-      caller: 'api::ingest::invalidateDatasets',
-      context: {
-        ingestDatalogId: req.params.ingestDatalogId,
-        datalogId: result.datalogId
-      }
-    });
+    if (!result.duplicate && result.datasetId && result.reading) {
+      await invalidateLivePointSafely({
+        logger,
+        queryService,
+        datasetIds: [result.datasetId],
+        point: {
+          id: result.reading.id,
+          datasetId: result.datasetId,
+          datalogId: result.datalogId,
+          occurredAt: result.reading.occurredAt,
+          receivedAt: result.reading.receivedAt,
+          latitude: result.reading.latitude,
+          longitude: result.reading.longitude,
+          altitudeMeters: result.reading.altitudeMeters,
+          accuracy: result.reading.accuracy,
+          measurements: result.reading.measurements ?? {}
+        },
+        correlationId: req.correlationId,
+        caller: 'api::ingest::invalidateLivePoint',
+        context: {
+          ingestDatalogId: req.params.ingestDatalogId,
+          datalogId: result.datalogId
+        }
+      });
+      liveUpdateService?.publishPointUpdate({
+        datasetId: result.datasetId,
+        datalogId: result.datalogId,
+        reading: result.reading
+      });
+    }
     sendJson({
       res,
       status: result.duplicate ? 200 : 201,
@@ -1153,28 +1209,58 @@ const main = async () => {
 
   app.get('/api/map/points', asyncHandler(async (req, res) => {
     const auth = requireAuth({ req, correlationId: req.correlationId });
+    const liveUpdateSnapshot = liveUpdateService?.getSnapshot() ?? {
+      currentCursor: 0,
+      currentPublishedAt: new Date().toISOString()
+    };
     sendJson({
       res,
       body: {
         ok: true,
-        result: await queryService.getRawPoints({
-          user: auth.user,
-          input: req.query,
-          correlationId: req.correlationId
-        })
+        result: {
+          ...await queryService.getRawPoints({
+            user: auth.user,
+            input: req.query,
+            correlationId: req.correlationId
+          }),
+          liveUpdates: liveUpdateSnapshot
+        }
       }
     });
   }));
 
   app.get('/api/map/aggregates', asyncHandler(async (req, res) => {
     const auth = requireAuth({ req, correlationId: req.correlationId });
+    const liveUpdateSnapshot = liveUpdateService?.getSnapshot() ?? {
+      currentCursor: 0,
+      currentPublishedAt: new Date().toISOString()
+    };
     sendJson({
       res,
       body: {
         ok: true,
-        result: await queryService.getAggregates({
+        result: {
+          ...await queryService.getAggregates({
+            user: auth.user,
+            input: req.query,
+            correlationId: req.correlationId
+          }),
+          liveUpdates: liveUpdateSnapshot
+        }
+      }
+    });
+  }));
+
+  app.get('/api/map/live-updates', asyncHandler(async (req, res) => {
+    const auth = requireAuth({ req, correlationId: req.correlationId });
+    sendJson({
+      res,
+      body: {
+        ok: true,
+        result: await liveUpdateService.getUpdatesStatus({
           user: auth.user,
           input: req.query,
+          sinceCursor: req.query.sinceCursor,
           correlationId: req.correlationId
         })
       }
@@ -1529,10 +1615,16 @@ const main = async () => {
       }
     });
   });
+  liveUpdateService = createLiveUpdateService({
+    authService,
+    logger,
+    queryService,
+    server
+  });
 
   const close = async () => {
     server.close();
-    await Promise.all([db.close(), cache.close()]);
+    await Promise.all([liveUpdateService?.close(), db.close(), cache.close()]);
   };
 
   process.on('SIGTERM', () => {

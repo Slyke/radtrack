@@ -10,6 +10,7 @@ const defaultSettingsFromConfig = ({ runtimeConfig }) => ({
   'map.defaultAggregateShape': runtimeConfig.map.defaultAggregateShape,
   'map.defaultCellSizeMeters': runtimeConfig.map.defaultCellSizeMeters,
   'map.rawPointCap': runtimeConfig.map.rawPointCap,
+  'map.liveUpdatePollingIntervalSeconds': runtimeConfig.map.liveUpdatePollingIntervalSeconds,
   'aggregation.modeBucketDecimals': runtimeConfig.aggregation.modeBucketDecimals,
   'aggregation.cacheTtlSeconds': runtimeConfig.aggregation.cacheTtlSeconds
 });
@@ -72,6 +73,8 @@ export const createSettingsService = ({ db, runtimeConfig }) => {
       defaultAggregateShape: settings['map.defaultAggregateShape'] ?? runtimeConfig.map.defaultAggregateShape,
       defaultCellSizeMeters: settings['map.defaultCellSizeMeters'] ?? runtimeConfig.map.defaultCellSizeMeters,
       rawPointCap: settings['map.rawPointCap'] ?? runtimeConfig.map.rawPointCap,
+      liveUpdatePollingIntervalSeconds: settings['map.liveUpdatePollingIntervalSeconds']
+        ?? runtimeConfig.map.liveUpdatePollingIntervalSeconds,
       modeBucketDecimals: settings['aggregation.modeBucketDecimals'] ?? runtimeConfig.aggregation.modeBucketDecimals,
       cacheTtlSeconds: settings['aggregation.cacheTtlSeconds'] ?? runtimeConfig.aggregation.cacheTtlSeconds
     };

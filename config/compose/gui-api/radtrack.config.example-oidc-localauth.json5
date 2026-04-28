@@ -67,7 +67,8 @@
     defaultMetric: "doseRate",
     defaultAggregateShape: "hexagon",
     defaultCellSizeMeters: 250,
-    rawPointCap: 5000
+    rawPointCap: 5000,
+    liveUpdatePollingIntervalSeconds: 15
   },
   aggregation: {
     modeBucketDecimals: 2,
