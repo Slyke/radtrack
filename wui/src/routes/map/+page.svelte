@@ -4440,6 +4440,19 @@
       timeSliceConfigOpen = false;
       timeSliceLargeLoadConfirmedKey = '';
       clearTimeSlicePlaybackData();
+      const appliedFilters = getAppliedFilters();
+      if (!lookupsReady || getTimeFilterValidationKey({ sourceFilters: appliedFilters })) {
+        return;
+      }
+
+      clearScheduledSidebarUpdate();
+      requestMapData({
+        popupState: getAppliedPopupStateSnapshot(),
+        snapshot: getCurrentQuerySnapshot({
+          filters: appliedFilters,
+          viewport
+        })
+      });
     }
   };
 
