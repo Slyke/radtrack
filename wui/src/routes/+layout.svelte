@@ -6,6 +6,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import '$lib/styles/app.css';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { bootstrapSession, sessionStore } from '$lib/stores/session';
   import { changePassword, logout } from '$lib/api/client';
   import { localeStore, setLocale, translateMessage } from '$lib/i18n';
@@ -215,7 +216,10 @@
 {#if bootstrapError}
   <main class="content narrow">
     <section class="panel">
-      <h1>{t('radtrack-common_error-bootstrap')}</h1>
+      <div class="title-with-info">
+        <h1>{t('radtrack-common_error-bootstrap')}</h1>
+        <InfoTip text="RadTrack could not load the initial session or interface configuration. The message below may help an administrator diagnose it." />
+      </div>
       <p class="muted">{bootstrapError}</p>
     </section>
   </main>
@@ -306,7 +310,10 @@
       <form class="form-grid" onsubmit={submitPasswordChange}>
         <div>
           <div class="faint">{t('radtrack-app_title')}</div>
-          <h1>{t('radtrack-layout_password_change_required-title')}</h1>
+          <div class="title-with-info">
+            <h1>{t('radtrack-layout_password_change_required-title')}</h1>
+            <InfoTip text="This account must replace its temporary or reset password before the rest of RadTrack can be used." />
+          </div>
           <p class="muted">{t('radtrack-layout_must_change_password-description')}</p>
         </div>
 
@@ -315,11 +322,26 @@
           <span class="chip mid">{t('radtrack-common_group-label')}: {$sessionStore.user?.role}</span>
         </div>
 
-        <input bind:value={passwordForm.newPassword} placeholder={t('radtrack-common_new_password-placeholder')} type="password" />
-        <input bind:value={passwordForm.confirmPassword} placeholder={t('radtrack-common_confirm_new_password-placeholder')} type="password" />
+        <label>
+          <span class="muted field-title">
+            {t('radtrack-common_new_password-placeholder')}
+            <InfoTip text="Enter the new password you want this local account to use." />
+          </span>
+          <input bind:value={passwordForm.newPassword} placeholder={t('radtrack-common_new_password-placeholder')} type="password" />
+        </label>
+        <label>
+          <span class="muted field-title">
+            {t('radtrack-common_confirm_new_password-placeholder')}
+            <InfoTip text="Repeat the new password exactly to prevent accidental lockout from a typing error." />
+          </span>
+          <input bind:value={passwordForm.confirmPassword} placeholder={t('radtrack-common_confirm_new_password-placeholder')} type="password" />
+        </label>
 
         <div class="actions">
-          <button class="warning" disabled={passwordBusy} type="submit">{t('radtrack-common_update_password-button')}</button>
+          <div class="control-with-info">
+            <button class="warning" disabled={passwordBusy} type="submit">{t('radtrack-common_update_password-button')}</button>
+            <InfoTip text="Save the new password and continue into RadTrack." />
+          </div>
           <button class="danger" disabled={passwordBusy} onclick={handleLogout} type="button">{t('radtrack-common_logout-button')}</button>
         </div>
 

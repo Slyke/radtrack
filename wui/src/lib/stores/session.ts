@@ -16,6 +16,7 @@ const initialState: SessionPayload & {
     header: false
   },
   ui: null,
+  userSettings: null,
   build: null
 };
 
@@ -32,6 +33,7 @@ export const bootstrapSession = async () => {
       csrf: response.csrf ?? null,
       authModes: response.authModes,
       ui: response.ui ?? null,
+      userSettings: response.userSettings ?? null,
       build: response.build ?? null
     });
   } catch (error) {
@@ -45,6 +47,7 @@ export const bootstrapSession = async () => {
         csrf: null,
         authModes: body?.authModes ?? initialState.authModes,
         ui: null,
+        userSettings: null,
         build: body?.build ?? null
       });
       return;
@@ -52,4 +55,15 @@ export const bootstrapSession = async () => {
 
     throw error;
   }
+};
+
+export const updateSessionUserSettings = ({
+  userSettings
+}: {
+  userSettings: NonNullable<SessionPayload['userSettings']>;
+}) => {
+  sessionStore.update((session) => ({
+    ...session,
+    userSettings
+  }));
 };

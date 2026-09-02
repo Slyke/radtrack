@@ -39,6 +39,8 @@ Mutable non-secret settings are seeded from bootstrap files into Postgres and th
 
 `aggregation.cellCacheRefreshTtlOnRead` is a bootstrap default for each user's Settings page. It defaults to `false`; when a user enables the setting, aggregate cell cache hits reset the configured `aggregation.cacheTtlSeconds` timer on read.
 
+The Settings page also stores `ui.showInfoIcons` per user. It defaults to `true`; disabling it hides contextual information icons throughout the signed-in interface without removing or changing any controls.
+
 `ui.defaultLanguage` comes from the bootstrap config file and currently controls the WUI language with `en-US` fallback. There is no runtime language picker.
 
 ## Additional Env Vars

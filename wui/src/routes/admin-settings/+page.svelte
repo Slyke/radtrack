@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
 
@@ -52,7 +53,10 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radtrack-admin_settings_title')}</h1>
+    <div class="title-with-info">
+      <h1>{t('radtrack-admin_settings_title')}</h1>
+      <InfoTip text="Inspect bootstrap configuration and override mutable runtime settings for the whole RadTrack deployment." />
+    </div>
     <p class="muted">{t('radtrack-admin_settings_description')}</p>
   </div>
 </div>
@@ -65,21 +69,39 @@
 
 <section class="grid cols-2">
   <article class="panel">
-    <h2>{t('radtrack-admin_settings_bootstrap-title')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-admin_settings_bootstrap-title')}</h2>
+      <InfoTip text="Read-only startup configuration loaded from the deployment’s config and secrets sources." />
+    </div>
     <pre>{JSON.stringify(bootstrapInfo, null, 2)}</pre>
   </article>
 
   <article class="panel">
-    <h2>{t('radtrack-admin_settings_update-title')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-admin_settings_update-title')}</h2>
+      <InfoTip text="Submit a JSON object of runtime setting keys and values. These changes affect all users." />
+    </div>
     <div class="form-grid">
-      <textarea bind:value={updatesJson}></textarea>
-      <button class="primary" onclick={saveSettings}>{t('radtrack-common_save-button')}</button>
+      <label>
+        <span class="muted field-title">
+          {t('radtrack-common_payload-label')}
+          <InfoTip text="Enter valid JSON containing only the runtime keys you want to replace." />
+        </span>
+        <textarea bind:value={updatesJson}></textarea>
+      </label>
+      <div class="control-with-info">
+        <button class="primary" onclick={saveSettings}>{t('radtrack-common_save-button')}</button>
+        <InfoTip text="Validate and persist these system-wide runtime overrides." />
+      </div>
     </div>
   </article>
 </section>
 
 <section class="panel">
-  <h2>{t('radtrack-admin_settings_current_runtime-title')}</h2>
+  <div class="title-with-info">
+    <h2>{t('radtrack-admin_settings_current_runtime-title')}</h2>
+    <InfoTip text="The effective mutable settings, including their current values and whether they came from bootstrap defaults or a user override." />
+  </div>
   <div class="table-wrap">
     <table>
       <thead>

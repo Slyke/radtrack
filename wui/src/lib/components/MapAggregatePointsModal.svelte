@@ -2,6 +2,7 @@
 
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
 
   type CellValue = string | number | boolean | null;
@@ -414,7 +415,10 @@
     <header class="map-cell-points-modal-header">
       <div class="map-cell-points-modal-heading">
         <div class="map-cell-points-modal-title-row">
-          <h2 id="map-cell-points-modal-title">{t('radtrack-map_points_modal_title')}</h2>
+          <div class="title-with-info">
+            <h2 id="map-cell-points-modal-title">{t('radtrack-map_points_modal_title')}</h2>
+            <InfoTip text="Inspect every raw reading assigned to the selected aggregate cell, sort columns, or download the rows." />
+          </div>
           <span class="chip subtle">
             {t('radtrack-map_points_modal_count-label', {
               count: countFormatter().format(pointCount)
@@ -431,13 +435,22 @@
       </div>
 
       <div class="map-cell-points-modal-actions">
-        <button disabled={!canDownload} onclick={downloadCsv} type="button">
-          {t('radtrack-map_points_modal_download_csv-button')}
-        </button>
-        <button disabled={!canDownload} onclick={downloadJson} type="button">
-          {t('radtrack-map_points_modal_download_json-button')}
-        </button>
-        <button onclick={closeModal} type="button">{t('radtrack-common_close-button')}</button>
+        <div class="control-with-info">
+          <button disabled={!canDownload} onclick={downloadCsv} type="button">
+            {t('radtrack-map_points_modal_download_csv-button')}
+          </button>
+          <InfoTip text="Download the displayed cell readings as a flat comma-separated table." />
+        </div>
+        <div class="control-with-info">
+          <button disabled={!canDownload} onclick={downloadJson} type="button">
+            {t('radtrack-map_points_modal_download_json-button')}
+          </button>
+          <InfoTip text="Download the cell readings with structured export context as formatted JSON." />
+        </div>
+        <div class="control-with-info">
+          <button onclick={closeModal} type="button">{t('radtrack-common_close-button')}</button>
+          <InfoTip text="Close the aggregate-cell reading dialog." />
+        </div>
       </div>
     </header>
 
@@ -457,17 +470,20 @@
               </th>
               {#each columns as column}
                 <th>
-                  <button
-                    aria-label={getSortLabel({ column })}
-                    class="map-cell-points-sort-button"
-                    onclick={() => toggleSort({ column })}
-                    type="button"
-                  >
-                    <span>{column.label}</span>
-                    <span aria-hidden="true" class="map-cell-points-sort-indicator">
-                      {getSortIndicator({ column })}
-                    </span>
-                  </button>
+                  <div class="control-with-info map-cell-points-sort-control">
+                    <button
+                      aria-label={getSortLabel({ column })}
+                      class="map-cell-points-sort-button"
+                      onclick={() => toggleSort({ column })}
+                      type="button"
+                    >
+                      <span>{column.label}</span>
+                      <span aria-hidden="true" class="map-cell-points-sort-indicator">
+                        {getSortIndicator({ column })}
+                      </span>
+                    </button>
+                    <InfoTip text={`Sort all cell readings by ${column.label}; click again to reverse the order.`} />
+                  </div>
                 </th>
               {/each}
             </tr>
@@ -630,6 +646,10 @@
     letter-spacing: 0.02em;
     text-align: left;
     transform: none;
+  }
+
+  .map-cell-points-sort-control {
+    width: 100%;
   }
 
   .map-cell-points-sort-button:hover,

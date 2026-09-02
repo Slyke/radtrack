@@ -1,4 +1,5 @@
 <script lang="ts">
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { localeStore, translateMessage } from '$lib/i18n';
 
   export let error: {
@@ -16,7 +17,10 @@
 </script>
 
 <section class="panel">
-  <h1>{t('radtrack-common_error-request_failed')}</h1>
+  <div class="title-with-info">
+    <h1>{t('radtrack-common_error-request_failed')}</h1>
+    <InfoTip text="This page reports an unexpected interface or request failure. Error codes and correlation IDs help an administrator trace it." />
+  </div>
   <p class="muted">{error?.message ?? t('radtrack-common_error-unexpected_frontend')}</p>
   <div class="chip-row">
     {#if error?.errorKey}

@@ -132,6 +132,7 @@ export const getMe = async () => apiFetch<{
   csrf?: SessionPayload['csrf'];
   authModes: SessionPayload['authModes'];
   ui?: SessionPayload['ui'];
+  userSettings?: SessionPayload['userSettings'];
   build?: SessionPayload['build'];
 }>({ path: '/api/me' });
 

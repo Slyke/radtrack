@@ -338,7 +338,10 @@ const main = async () => {
       return;
     }
 
-    const ui = await settingsService.getUiConfig();
+    const [ui, userSettings] = await Promise.all([
+      settingsService.getUiConfig(),
+      settingsService.getUserSettings({ userId: req.auth.user.id })
+    ]);
     sendJson({
       res,
       body: {
@@ -356,6 +359,7 @@ const main = async () => {
           header: runtimeConfig.auth.headerEnabled
         },
         ui,
+        userSettings,
         build: buildInfo
       }
     });

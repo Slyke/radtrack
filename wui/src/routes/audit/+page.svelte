@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
 
   interface AuditEntry {
@@ -150,7 +151,10 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radtrack-audit_title')}</h1>
+    <div class="title-with-info">
+      <h1>{t('radtrack-audit_title')}</h1>
+      <InfoTip text="Inspect the chronological record of security, data, access, import, and administrative actions visible to your role." />
+    </div>
     <p class="muted">{t('radtrack-audit_description')}</p>
     <div class="chip-row audit-meta-row">
       <span class="chip subtle">
@@ -171,11 +175,17 @@
 
 <section class="panel">
   <div class="page-header audit-toolbar">
-    <h2>{t('radtrack-common_recent_audit-label')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-common_recent_audit-label')}</h2>
+      <InfoTip text="Entries are shown newest first. Use the limit control to load a larger or complete result set." />
+    </div>
 
     <div class="actions audit-actions">
       <label class="audit-limit-field">
-        <span class="muted">{t('radtrack-audit_limit-label')}</span>
+        <span class="muted field-title">
+          {t('radtrack-audit_limit-label')}
+          <InfoTip text="Choose the maximum number of newest audit entries to load. All may be slower on a large history." />
+        </span>
         <select bind:value={limit} onchange={loadEntries}>
           {#each limitOptions as option}
             <option value={option}>{formatLimitLabel(option)}</option>
@@ -183,7 +193,10 @@
         </select>
       </label>
 
-      <button class="primary audit-export-button" onclick={downloadAudit} type="button">{t('radtrack-audit_export-button')}</button>
+      <div class="control-with-info">
+        <button class="primary audit-export-button" onclick={downloadAudit} type="button">{t('radtrack-audit_export-button')}</button>
+        <InfoTip text="Download the currently selected audit result set as JSON." />
+      </div>
     </div>
   </div>
 
@@ -231,6 +244,7 @@
                     <code class="json-preview-code">{formatJsonPreview(metadata)}</code>
                     <span class="json-preview-action faint">{t('radtrack-audit_metadata_open-button')}</span>
                   </button>
+                  <InfoTip text="Open the structured metadata extracted from this event’s payload." />
                 {:else}
                   <span class="faint">{t('radtrack-common_none')}</span>
                 {/if}
@@ -276,13 +290,25 @@
     >
       <div class="page-header audit-modal-header">
         <div>
-          <h2 id="audit-json-modal-title">{selectedJson.title}</h2>
+          <div class="title-with-info">
+            <h2 id="audit-json-modal-title">{selectedJson.title}</h2>
+            <InfoTip text="A read-only formatted view of the selected audit data." />
+          </div>
           <p class="muted">{selectedJson.description}</p>
         </div>
-        <button onclick={closeJsonModal} type="button">{t('radtrack-common_close-button')}</button>
+        <div class="control-with-info">
+          <button onclick={closeJsonModal} type="button">{t('radtrack-common_close-button')}</button>
+          <InfoTip text="Close this audit detail dialog." />
+        </div>
       </div>
 
-      <textarea class="audit-modal-text" readonly rows="20" value={selectedJson.value}></textarea>
+      <label>
+        <span class="muted field-title">
+          JSON
+          <InfoTip text="The recorded object is read-only and can be selected for copying." />
+        </span>
+        <textarea class="audit-modal-text" readonly rows="20" value={selectedJson.value}></textarea>
+      </label>
     </div>
   </div>
 {/if}

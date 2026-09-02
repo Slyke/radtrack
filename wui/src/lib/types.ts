@@ -21,6 +21,15 @@ export interface UiConfig {
   cacheTtlSeconds: number;
 }
 
+export interface UserSettings {
+  cellCacheRefreshTtlOnRead: boolean;
+  showInfoIcons: boolean;
+  defaults?: {
+    cellCacheRefreshTtlOnRead: boolean;
+    showInfoIcons: boolean;
+  };
+}
+
 export interface BuildInfo {
   version: string;
   commitHash: string;
@@ -41,5 +50,6 @@ export interface SessionPayload {
     header: boolean;
   };
   ui: UiConfig | null;
+  userSettings: UserSettings | null;
   build: BuildInfo | null;
 }

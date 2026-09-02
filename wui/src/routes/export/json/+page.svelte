@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { humanizePropKey, normalizePropKey } from '$lib/datalog-fields';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
@@ -203,35 +204,50 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radtrack-export_title')}</h1>
+    <div class="title-with-info">
+      <h1>{t('radtrack-export_title')}</h1>
+      <InfoTip text="Build and preview a portable JSON export from datasets or combined datasets you can access." />
+    </div>
     <p class="muted">{t('radtrack-export_description')}</p>
   </div>
 </div>
 
 <section class="grid cols-2 export-layout">
   <article class="panel export-panel">
-    <h2>{t('radtrack-export_request-title')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-export_request-title')}</h2>
+      <InfoTip text="Choose source data, payload detail, and optional aggregate geometry before running the export." />
+    </div>
 
     <div class="form-grid">
       <div class:export-source-grid-single={!showBothSourceColumns} class="grid export-source-grid">
         {#if hasDatasets}
           <section class="export-source-panel">
             <label class="export-source-copy" for="export-dataset-ids">
-              <span class="muted">{t('radtrack-datasets_title')}</span>
+              <span class="muted field-title">
+                {t('radtrack-datasets_title')}
+                <InfoTip text="Select one or more individual datasets to include as export sources." />
+              </span>
               <span class="faint export-help">{t('radtrack-export_datasets-help')}</span>
             </label>
 
             <div class="actions export-source-actions">
-              <button
-                disabled={form.datasetIds.length === datasets.length}
-                onclick={handleDatasetSelectAll}
-                type="button"
-              >
-                {t('radtrack-map_tracks_all-button')}
-              </button>
-              <button disabled={!form.datasetIds.length} onclick={handleDatasetClearAll} type="button">
-                {t('radtrack-map_tracks_none-button')}
-              </button>
+              <div class="control-with-info">
+                <button
+                  disabled={form.datasetIds.length === datasets.length}
+                  onclick={handleDatasetSelectAll}
+                  type="button"
+                >
+                  {t('radtrack-map_tracks_all-button')}
+                </button>
+                <InfoTip text="Select every individual dataset in this list." />
+              </div>
+              <div class="control-with-info">
+                <button disabled={!form.datasetIds.length} onclick={handleDatasetClearAll} type="button">
+                  {t('radtrack-map_tracks_none-button')}
+                </button>
+                <InfoTip text="Clear all individual dataset selections." />
+              </div>
             </div>
 
             <select class="export-source-select" bind:value={form.datasetIds} id="export-dataset-ids" multiple size="12">
@@ -245,25 +261,34 @@
         {#if hasCombinedDatasets}
           <section class="export-source-panel">
             <label class="export-source-copy" for="export-combined-dataset-ids">
-              <span class="muted">{t('radtrack-common_combined_datasets-label')}</span>
+              <span class="muted field-title">
+                {t('radtrack-common_combined_datasets-label')}
+                <InfoTip text="Select virtual combined datasets; their current member datasets become export sources." />
+              </span>
               <span class="faint export-help">{t('radtrack-export_combined_datasets-help')}</span>
             </label>
 
             <div class="actions export-source-actions">
-              <button
-                disabled={form.combinedDatasetIds.length === combinedDatasets.length}
-                onclick={handleCombinedDatasetSelectAll}
-                type="button"
-              >
-                {t('radtrack-map_tracks_all-button')}
-              </button>
-              <button
-                disabled={!form.combinedDatasetIds.length}
-                onclick={handleCombinedDatasetClearAll}
-                type="button"
-              >
-                {t('radtrack-map_tracks_none-button')}
-              </button>
+              <div class="control-with-info">
+                <button
+                  disabled={form.combinedDatasetIds.length === combinedDatasets.length}
+                  onclick={handleCombinedDatasetSelectAll}
+                  type="button"
+                >
+                  {t('radtrack-map_tracks_all-button')}
+                </button>
+                <InfoTip text="Select every combined dataset in this list." />
+              </div>
+              <div class="control-with-info">
+                <button
+                  disabled={!form.combinedDatasetIds.length}
+                  onclick={handleCombinedDatasetClearAll}
+                  type="button"
+                >
+                  {t('radtrack-map_tracks_none-button')}
+                </button>
+                <InfoTip text="Clear all combined dataset selections." />
+              </div>
             </div>
 
             <select
@@ -282,12 +307,18 @@
       </div>
 
       <div class="form-grid">
-        <div class="muted">{t('radtrack-common_payload-label')}</div>
+        <div class="muted field-title">
+          {t('radtrack-common_payload-label')}
+          <InfoTip text="Choose which kinds of data and metadata the exported JSON should contain." />
+        </div>
         <div class="grid cols-2 export-options-grid">
           <label class="export-checkbox-field">
             <input bind:checked={form.includeRaw} type="checkbox" />
             <span class="export-checkbox-copy">
-              <span>{t('radtrack-common_raw_points-label')}</span>
+              <span class="field-title">
+                {t('radtrack-common_raw_points-label')}
+                <InfoTip text="Include individual timestamped readings, subject to the configured raw point cap unless this is a full export." />
+              </span>
               <span class="faint export-help">{t('radtrack-export_raw_points-help')}</span>
             </span>
           </label>
@@ -295,7 +326,10 @@
           <label class="export-checkbox-field">
             <input bind:checked={form.includeAggregates} type="checkbox" />
             <span class="export-checkbox-copy">
-              <span>{t('radtrack-common_aggregates-label')}</span>
+              <span class="field-title">
+                {t('radtrack-common_aggregates-label')}
+                <InfoTip text="Include spatial cells computed from the chosen metric, shape, and cell size." />
+              </span>
               <span class="faint export-help">{t('radtrack-export_aggregates-help')}</span>
             </span>
           </label>
@@ -303,7 +337,10 @@
           <label class="export-checkbox-field">
             <input bind:checked={form.applyExcludeAreas} type="checkbox" />
             <span class="export-checkbox-copy">
-              <span>{t('radtrack-common_apply_exclude_areas-label')}</span>
+              <span class="field-title">
+                {t('radtrack-common_apply_exclude_areas-label')}
+                <InfoTip text="Apply source datasets’ enabled exclusion areas before raw points or aggregate cells are produced." />
+              </span>
               <span class="faint export-help">{t('radtrack-export_apply_exclude_areas-help')}</span>
             </span>
           </label>
@@ -311,7 +348,10 @@
           <label class="export-checkbox-field">
             <input bind:checked={form.fullExport} type="checkbox" />
             <span class="export-checkbox-copy">
-              <span>{t('radtrack-export_full_export-label')}</span>
+              <span class="field-title">
+                {t('radtrack-export_full_export-label')}
+                <InfoTip text="Include complete backup-oriented metadata and bypass the normal preview-oriented raw point cap." />
+              </span>
               <span class="faint export-help">{t('radtrack-export_full_export-help')}</span>
             </span>
           </label>
@@ -321,7 +361,10 @@
       {#if form.includeAggregates}
         <section class="export-aggregate-config">
           <label class="export-field">
-            <span class="muted">{t('radtrack-common_metric-label')}</span>
+            <span class="muted field-title">
+              {t('radtrack-common_metric-label')}
+              <InfoTip text="The measurement property aggregated into each spatial cell, such as doseRate or countRate." />
+            </span>
             <span class="faint export-help">{t('radtrack-export_metric-help')}</span>
             <input
               bind:value={form.metric}
@@ -339,12 +382,18 @@
           </label>
 
           <div class="form-grid">
-            <div class="muted">{t('radtrack-export_aggregate_layout-title')}</div>
+            <div class="muted field-title">
+              {t('radtrack-export_aggregate_layout-title')}
+              <InfoTip text="Configure the geometry used to group nearby readings into aggregate cells." />
+            </div>
             <span class="faint export-help">{t('radtrack-export_aggregate_layout-help')}</span>
 
             <div class="grid cols-2 export-aggregate-grid">
               <label class="export-field">
-                <span class="muted">{t('radtrack-common_shape-label')}</span>
+                <span class="muted field-title">
+                  {t('radtrack-common_shape-label')}
+                  <InfoTip text="Choose hexagonal, square, or circular spatial cells for the aggregate output." />
+                </span>
                 <select bind:value={form.shape}>
                   <option value="hexagon">{t('radtrack-common_hexagon-label')}</option>
                   <option value="square">{t('radtrack-common_square-label')}</option>
@@ -353,7 +402,10 @@
               </label>
 
               <label class="export-field">
-                <span class="muted">{t('radtrack-map_cell_size-label')}</span>
+                <span class="muted field-title">
+                  {t('radtrack-map_cell_size-label')}
+                  <InfoTip text="Set the approximate cell width in meters. Larger cells summarize more readings together." />
+                </span>
                 <input bind:value={form.cellSizeMeters} min="10" type="number" />
               </label>
             </div>
@@ -369,7 +421,10 @@
       {/if}
 
       <div class="actions export-actions">
-        <button class="primary" onclick={runExport} type="button">{t('radtrack-export_run-button')}</button>
+        <div class="control-with-info">
+          <button class="primary" onclick={runExport} type="button">{t('radtrack-export_run-button')}</button>
+          <InfoTip text="Request the export using the current selections and display a formatted preview." />
+        </div>
       </div>
 
       {#if errorMessage}
@@ -379,7 +434,10 @@
   </article>
 
   <article class="panel export-panel export-preview-panel">
-    <h2>{t('radtrack-common_preview-label')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-common_preview-label')}</h2>
+      <InfoTip text="Read-only formatted JSON returned by the export request. Large results may be shortened in this browser preview." />
+    </div>
 
     {#if exportEnvelope}
       <div class="form-grid export-preview-meta">
@@ -423,7 +481,13 @@
       <p class="faint">{t('radtrack-export_preview_truncated', { chars: EXPORT_PREVIEW_CHAR_LIMIT })}</p>
     {/if}
 
-    <textarea bind:value={exportResult} class="export-preview-text" readonly></textarea>
+    <label class="export-preview-field">
+      <span class="muted field-title">
+        JSON
+        <InfoTip text="Select and copy this text to use the generated export outside RadTrack." />
+      </span>
+      <textarea bind:value={exportResult} class="export-preview-text" readonly></textarea>
+    </label>
   </article>
 </section>
 
@@ -443,6 +507,14 @@
   .export-preview-panel {
     display: flex;
     flex-direction: column;
+  }
+
+  .export-preview-field {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: var(--space-2);
+    min-height: 0;
   }
 
   .export-field {

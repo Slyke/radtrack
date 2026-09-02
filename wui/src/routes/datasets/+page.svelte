@@ -4,6 +4,7 @@
   import { browser } from '$app/environment';
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { localeStore, translateMessage } from '$lib/i18n';
   import {
     isMapDatasetDefaultEnabled,
@@ -356,7 +357,10 @@
   <div class="datasets-page-header">
     <div class="page-header">
       <div>
-        <h1>{t('radtrack-datasets_title')}</h1>
+        <div class="title-with-info">
+          <h1>{t('radtrack-datasets_title')}</h1>
+          <InfoTip text="Create, review, order, and configure every dataset your account can access, plus the measurement fields available to the map." />
+        </div>
         <p class="muted">{t('radtrack-datasets_description')}</p>
       </div>
     </div>
@@ -373,17 +377,35 @@
       <article class="panel">
         <details class="datasets-accordion">
           <summary>
-            <span>{t('radtrack-datasets_create-title')}</span>
+            <span class="field-title">
+              {t('radtrack-datasets_create-title')}
+              <InfoTip text="Expand this section to create an empty dataset that can receive live tracks or later imports." />
+            </span>
             <span class="datasets-accordion-summary">
               <span aria-hidden="true" class="datasets-accordion-icon"></span>
             </span>
           </summary>
 
           <div class="form-grid">
-            <input bind:value={createForm.name} placeholder={t('radtrack-common_dataset_name-label')} />
-            <textarea bind:value={createForm.description} placeholder={t('radtrack-common_description-label')}></textarea>
+            <label>
+              <span class="muted field-title">
+                {t('radtrack-common_dataset_name-label')}
+                <InfoTip text="The name used to identify this dataset in lists, maps, shares, and exports." />
+              </span>
+              <input bind:value={createForm.name} placeholder={t('radtrack-common_dataset_name-label')} />
+            </label>
+            <label>
+              <span class="muted field-title">
+                {t('radtrack-common_description-label')}
+                <InfoTip text="Optional context describing the dataset’s source, location, purpose, or owner." />
+              </span>
+              <textarea bind:value={createForm.description} placeholder={t('radtrack-common_description-label')}></textarea>
+            </label>
             <div class="actions">
-              <button class="primary" onclick={createDataset}>{t('radtrack-common_create-button')}</button>
+              <div class="control-with-info">
+                <button class="primary" onclick={createDataset}>{t('radtrack-common_create-button')}</button>
+                <InfoTip text="Create the empty dataset using the name and description above." />
+              </div>
             </div>
           </div>
         </details>
@@ -392,14 +414,29 @@
       <article class="panel datasets-field-panel">
         <div class="datasets-field-header">
           <div>
-            <h2>{t('radtrack-datasets_field_inventory-title')}</h2>
+            <div class="title-with-info">
+              <h2>{t('radtrack-datasets_field_inventory-title')}</h2>
+              <InfoTip text="All core and measurement fields found across accessible tracks, with controls for popup visibility, metric eligibility, and display order." />
+            </div>
             <p class="muted">{t('radtrack-datasets_field_inventory-description')}</p>
           </div>
           <div class="actions">
-            <button onclick={() => setAllFieldFlag({ key: 'popupDefaultEnabled', enabled: true })}>+ Popup</button>
-            <button onclick={() => setAllFieldFlag({ key: 'popupDefaultEnabled', enabled: false })}>- Popup</button>
-            <button onclick={() => setAllFieldFlag({ key: 'metricListEnabled', enabled: true })}>+ Metrics</button>
-            <button onclick={() => setAllFieldFlag({ key: 'metricListEnabled', enabled: false })}>- Metrics</button>
+            <div class="control-with-info">
+              <button onclick={() => setAllFieldFlag({ key: 'popupDefaultEnabled', enabled: true })}>+ Popup</button>
+              <InfoTip text="Enable every directly editable field in map reading popups." />
+            </div>
+            <div class="control-with-info">
+              <button onclick={() => setAllFieldFlag({ key: 'popupDefaultEnabled', enabled: false })}>- Popup</button>
+              <InfoTip text="Disable every directly editable field in map reading popups." />
+            </div>
+            <div class="control-with-info">
+              <button onclick={() => setAllFieldFlag({ key: 'metricListEnabled', enabled: true })}>+ Metrics</button>
+              <InfoTip text="Make every eligible numeric or time field available in the map metric selector." />
+            </div>
+            <div class="control-with-info">
+              <button onclick={() => setAllFieldFlag({ key: 'metricListEnabled', enabled: false })}>- Metrics</button>
+              <InfoTip text="Remove every editable measurement field from the map metric selector." />
+            </div>
           </div>
         </div>
 
@@ -432,7 +469,10 @@
                           })}
                           type="checkbox"
                         />
-                        <span>{t('radtrack-datasets_field_inventory_visible-label')}</span>
+                        <span class="field-title">
+                          {t('radtrack-datasets_field_inventory_visible-label')}
+                          <InfoTip text="Show this field by default when a reading popup opens on the map." />
+                        </span>
                       </label>
                       {#if field.source !== 'synthetic' && field.valueType !== 'string'}
                         <label class="checkbox-field field-inventory-toggle">
@@ -446,7 +486,10 @@
                             })}
                             type="checkbox"
                           />
-                          <span>{t('radtrack-track_metric_list_enabled-label')}</span>
+                          <span class="field-title">
+                            {t('radtrack-track_metric_list_enabled-label')}
+                            <InfoTip text="Allow this field to be selected as the active map or aggregate metric." />
+                          </span>
                         </label>
                       {/if}
                     </div>
@@ -537,22 +580,28 @@
                 </div>
 
                 <div class="field-inventory-actions">
-                  <button
-                    aria-label={t('radtrack-common_move_up-button')}
-                    disabled={index === 0}
-                    onclick={() => moveField({ propKey: field.propKey, direction: 'up' })}
-                    type="button"
-                  >
-                    ↑
-                  </button>
-                  <button
-                    aria-label={t('radtrack-common_move_down-button')}
-                    disabled={index === orderedFieldInventory.length - 1}
-                    onclick={() => moveField({ propKey: field.propKey, direction: 'down' })}
-                    type="button"
-                  >
-                    ↓
-                  </button>
+                  <div class="control-with-info">
+                    <button
+                      aria-label={t('radtrack-common_move_up-button')}
+                      disabled={index === 0}
+                      onclick={() => moveField({ propKey: field.propKey, direction: 'up' })}
+                      type="button"
+                    >
+                      ↑
+                    </button>
+                    <InfoTip text="Move this field earlier in map controls and reading displays for your browser." />
+                  </div>
+                  <div class="control-with-info">
+                    <button
+                      aria-label={t('radtrack-common_move_down-button')}
+                      disabled={index === orderedFieldInventory.length - 1}
+                      onclick={() => moveField({ propKey: field.propKey, direction: 'down' })}
+                      type="button"
+                    >
+                      ↓
+                    </button>
+                    <InfoTip text="Move this field later in map controls and reading displays for your browser." />
+                  </div>
                 </div>
               </div>
             {/each}
@@ -565,10 +614,19 @@
 
     <article class="panel datasets-list-panel">
       <div class="datasets-field-header">
-        <h2>{t('radtrack-datasets_accessible-title')}</h2>
+        <div class="title-with-info">
+          <h2>{t('radtrack-datasets_accessible-title')}</h2>
+          <InfoTip text="Datasets you own or that another user shared with you, including map defaults and local display order." />
+        </div>
         <div class="actions">
-          <button onclick={() => setAllDatasetDefaults({ enabled: true })}>+ All</button>
-          <button onclick={() => setAllDatasetDefaults({ enabled: false })}>- All</button>
+          <div class="control-with-info">
+            <button onclick={() => setAllDatasetDefaults({ enabled: true })}>+ All</button>
+            <InfoTip text="Select every accessible dataset by default when the map opens." />
+          </div>
+          <div class="control-with-info">
+            <button onclick={() => setAllDatasetDefaults({ enabled: false })}>- All</button>
+            <InfoTip text="Start the map with no individual datasets selected by default." />
+          </div>
         </div>
       </div>
       <div class="table-wrap">
@@ -600,6 +658,7 @@
                       })}
                       type="checkbox"
                     />
+                    <InfoTip text="Include this dataset in your default map selection. This browser preference does not affect other users." />
                   </label>
                 </td>
                 <td>{dataset.accessLevel}</td>
@@ -607,26 +666,35 @@
                 <td>{dataset.readingCount}</td>
                 <td>
                   <div class="dataset-table-actions">
-                    <button
-                      aria-label={t('radtrack-common_move_up-button')}
-                      disabled={index === 0}
-                      onclick={() => moveDataset({ datasetId: dataset.id, direction: 'up' })}
-                      type="button"
-                    >
-                      ↑
-                    </button>
-                    <button
-                      aria-label={t('radtrack-common_move_down-button')}
-                      disabled={index === orderedDatasets.length - 1}
-                      onclick={() => moveDataset({ datasetId: dataset.id, direction: 'down' })}
-                      type="button"
-                    >
-                      ↓
-                    </button>
-                    {#if dataset.accessLevel === 'edit'}
-                      <button class="danger" onclick={() => deleteDataset({ datasetId: dataset.id, datasetName: dataset.name })}>
-                        {t('radtrack-common_danger-delete-button')}
+                    <div class="control-with-info">
+                      <button
+                        aria-label={t('radtrack-common_move_up-button')}
+                        disabled={index === 0}
+                        onclick={() => moveDataset({ datasetId: dataset.id, direction: 'up' })}
+                        type="button"
+                      >
+                        ↑
                       </button>
+                      <InfoTip text="Move this dataset earlier in your map and dataset lists." />
+                    </div>
+                    <div class="control-with-info">
+                      <button
+                        aria-label={t('radtrack-common_move_down-button')}
+                        disabled={index === orderedDatasets.length - 1}
+                        onclick={() => moveDataset({ datasetId: dataset.id, direction: 'down' })}
+                        type="button"
+                      >
+                        ↓
+                      </button>
+                      <InfoTip text="Move this dataset later in your map and dataset lists." />
+                    </div>
+                    {#if dataset.accessLevel === 'edit'}
+                      <div class="control-with-info dataset-delete-control">
+                        <button class="danger" onclick={() => deleteDataset({ datasetId: dataset.id, datasetName: dataset.name })}>
+                          {t('radtrack-common_danger-delete-button')}
+                        </button>
+                        <InfoTip text="Permanently delete this dataset and all tracks and readings it owns after confirmation." />
+                      </div>
                     {/if}
                   </div>
                 </td>
@@ -863,16 +931,16 @@
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: var(--space-2);
-    width: 6rem;
+    width: 13rem;
     justify-items: stretch;
   }
 
-  .dataset-table-actions > button {
+  .dataset-table-actions > .control-with-info > button {
     width: 100%;
     min-width: 0;
   }
 
-  .dataset-table-actions > .danger {
+  .dataset-table-actions > .dataset-delete-control {
     grid-column: 1 / -1;
   }
 

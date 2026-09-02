@@ -3,6 +3,7 @@
 <script lang="ts">
   import { browser } from '$app/environment';
   import { onDestroy, onMount, untrack } from 'svelte';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import LeafletMap from '$lib/components/LeafletMap.svelte';
   import MapAggregatePointsModal from '$lib/components/MapAggregatePointsModal.svelte';
   import { apiFetch, resolveApiWebSocketPath } from '$lib/api/client';
@@ -5161,7 +5162,10 @@
 <div class="map-page">
   <div class="page-header">
     <div>
-      <h1>{t('radtrack-map_title')}</h1>
+      <div class="title-with-info">
+        <h1>{t('radtrack-map_title')}</h1>
+        <InfoTip text="Explore selected datasets and tracks spatially as raw readings or calculated aggregate cells." />
+      </div>
     </div>
     <div class="chip-row">
       {#if hasPendingSidebarChanges()}
@@ -5177,7 +5181,10 @@
     <aside class="map-sidebar" class:compact={sidebarSize === 'small'}>
       <section class="panel">
         <div class="map-panel-header">
-          <h2>{t('radtrack-common_filters-label')}</h2>
+          <div class="title-with-info">
+            <h2>{t('radtrack-common_filters-label')}</h2>
+            <InfoTip text="Choose source data, time range, metric, rendering mode, geometry, and exclusion behavior for the map." />
+          </div>
           <div class="map-panel-actions">
             <div class="sidebar-size-toggle" aria-label={t('radtrack-map_sidebar_size-label')}>
               {#each sidebarSizeOptions as option}
@@ -5195,20 +5202,29 @@
                 </button>
               {/each}
             </div>
-            <button onclick={handleFilterReset} type="button">
-              {t('radtrack-map_reset_filters-button')}
-            </button>
-            {#if !autoUpdateMap}
-              <button class="primary" disabled={!canUpdateMap} onclick={updateMap}>
-                {t('radtrack-map_update-button')}
+            <div class="control-with-info">
+              <button onclick={handleFilterReset} type="button">
+                {t('radtrack-map_reset_filters-button')}
               </button>
+              <InfoTip text="Restore map filters and display choices to their configured defaults." />
+            </div>
+            {#if !autoUpdateMap}
+              <div class="control-with-info">
+                <button class="primary" disabled={!canUpdateMap} onclick={updateMap}>
+                  {t('radtrack-map_update-button')}
+                </button>
+                <InfoTip text="Apply pending filter changes and refresh the map query." />
+              </div>
             {/if}
           </div>
         </div>
 
         <label class="checkbox-field map-auto-update">
           <input bind:checked={autoUpdateMap} onchange={handleAutoUpdateToggle} type="checkbox" />
-          <span>{t('radtrack-map_auto_update-label')}</span>
+          <span class="field-title">
+            {t('radtrack-map_auto_update-label')}
+            <InfoTip text="Refresh the map automatically whenever a filter or display setting changes." />
+          </span>
         </label>
 
         <label class="checkbox-field map-live-updates">
@@ -5218,7 +5234,10 @@
             onchange={handleLiveUpdatesToggle}
             type="checkbox"
           />
-          <span>{t('radtrack-map_live_updates-label')}</span>
+          <span class="field-title">
+            {t('radtrack-map_live_updates-label')}
+            <InfoTip text="Listen for newly ingested readings and add matching points without manually refreshing. Absolute time ranges disable this." />
+          </span>
           <span class="chip subtle">{liveUpdateStatusLabel}</span>
         </label>
         {#if !liveUpdatesAllowed}
@@ -5228,7 +5247,10 @@
         {#if liveUpdatesEnabled && liveUpdatesAllowed}
           <details class="selector-accordion live-update-log-accordion">
             <summary>
-              <span>{t('radtrack-map_live_update_log-title')}</span>
+              <span class="field-title">
+                {t('radtrack-map_live_update_log-title')}
+                <InfoTip text="Expand a short diagnostic history of live readings received by this map session." />
+              </span>
               <span class="settings-accordion-meta">
                 <span class={liveUpdateLog.length ? 'chip start' : 'chip subtle'}>
                   {formatCount(liveUpdateLog.length)}
@@ -5266,7 +5288,10 @@
           <div class="selector-accordion-stack">
             <details class="selector-accordion map-data-accordion">
               <summary>
-                <span>{t('radtrack-map_data-title')}</span>
+                <span class="field-title">
+                  {t('radtrack-map_data-title')}
+                  <InfoTip text="Choose individual datasets, combined datasets, and specific tracks that supply map readings." />
+                </span>
                 <span class="settings-accordion-meta">
                   <span aria-hidden="true" class="settings-accordion-icon"></span>
                 </span>
@@ -5275,7 +5300,10 @@
               <div class="map-data-accordion-body">
                 <details class="selector-accordion">
                   <summary>
-                    <span>{t('radtrack-datasets_title')}</span>
+                    <span class="field-title">
+                      {t('radtrack-datasets_title')}
+                      <InfoTip text="Select individual accessible datasets as map sources." />
+                    </span>
                     <span class="settings-accordion-meta">
                       <span class={selectionChipClass({ count: filters.datasetIds.length })}>
                         {filters.datasetIds.length
@@ -5288,12 +5316,18 @@
 
                   <div class="selection-stack">
                     <div class="actions">
-                      <button onclick={handleDatasetSelectAll} disabled={!datasets.length || filters.datasetIds.length === datasets.length}>
-                        {t('radtrack-map_tracks_all-button')}
-                      </button>
-                      <button onclick={handleDatasetClearAll} disabled={!filters.datasetIds.length}>
-                        {t('radtrack-map_tracks_none-button')}
-                      </button>
+                      <div class="control-with-info">
+                        <button onclick={handleDatasetSelectAll} disabled={!datasets.length || filters.datasetIds.length === datasets.length}>
+                          {t('radtrack-map_tracks_all-button')}
+                        </button>
+                        <InfoTip text="Select every individual dataset." />
+                      </div>
+                      <div class="control-with-info">
+                        <button onclick={handleDatasetClearAll} disabled={!filters.datasetIds.length}>
+                          {t('radtrack-map_tracks_none-button')}
+                        </button>
+                        <InfoTip text="Clear all individual dataset selections." />
+                      </div>
                     </div>
 
                     <div class="selection-list selection-list-tall">
@@ -5311,6 +5345,7 @@
                             <span class="selection-meta-row">{formatDatasetOptionSummary(dataset)}</span>
                             <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(dataset.id) })}</span>
                           </span>
+                          <InfoTip text="Toggle this dataset as a source for the map query." />
                         </label>
                       {/each}
                     </div>
@@ -5319,7 +5354,10 @@
 
                 <details class="selector-accordion">
                   <summary>
-                    <span>{t('radtrack-common_combined_datasets-label')}</span>
+                    <span class="field-title">
+                      {t('radtrack-common_combined_datasets-label')}
+                      <InfoTip text="Select virtual dataset groups; their current members are resolved as map sources." />
+                    </span>
                     <span class="settings-accordion-meta">
                       <span class={selectionChipClass({ count: filters.combinedDatasetIds.length })}>
                         {filters.combinedDatasetIds.length
@@ -5335,15 +5373,21 @@
 
                     {#if combinedDatasets.length}
                       <div class="actions">
-                        <button
-                          onclick={handleCombinedDatasetSelectAll}
-                          disabled={filters.combinedDatasetIds.length === combinedDatasets.length}
-                        >
-                          {t('radtrack-map_tracks_all-button')}
-                        </button>
-                        <button onclick={handleCombinedDatasetClearAll} disabled={!filters.combinedDatasetIds.length}>
-                          {t('radtrack-map_tracks_none-button')}
-                        </button>
+                        <div class="control-with-info">
+                          <button
+                            onclick={handleCombinedDatasetSelectAll}
+                            disabled={filters.combinedDatasetIds.length === combinedDatasets.length}
+                          >
+                            {t('radtrack-map_tracks_all-button')}
+                          </button>
+                          <InfoTip text="Select every combined dataset." />
+                        </div>
+                        <div class="control-with-info">
+                          <button onclick={handleCombinedDatasetClearAll} disabled={!filters.combinedDatasetIds.length}>
+                            {t('radtrack-map_tracks_none-button')}
+                          </button>
+                          <InfoTip text="Clear all combined dataset selections." />
+                        </div>
                       </div>
 
                       <div class="selection-list selection-list-tall">
@@ -5361,6 +5405,7 @@
                               <span class="selection-meta-row">{formatCombinedDatasetOptionSummary(combinedDataset)}</span>
                               <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(combinedDataset.id) })}</span>
                             </span>
+                            <InfoTip text="Toggle this combined dataset as a source for the map query." />
                           </label>
                         {/each}
                       </div>
@@ -5372,7 +5417,10 @@
 
                 <details class="selector-accordion">
                   <summary>
-                    <span>{t('radtrack-common_tracks-label')}</span>
+                    <span class="field-title">
+                      {t('radtrack-common_tracks-label')}
+                      <InfoTip text="Narrow selected individual datasets to particular tracks. Combined datasets include their member tracks independently." />
+                    </span>
                     <span class="settings-accordion-meta">
                       <span class={filters.trackSelectionMode === 'all' ? 'chip start' : selectionChipClass({ count: filters.trackIds.length })}>
                         {trackSelectionSummary}
@@ -5384,12 +5432,18 @@
                   <div class="selection-stack">
                     {#if filters.datasetIds.length}
                       <div class="actions">
-                        <button onclick={handleTrackSelectAll} disabled={filters.trackSelectionMode === 'all' || !selectedTrackGroups.length}>
-                          {t('radtrack-map_tracks_all-button')}
-                        </button>
-                        <button onclick={handleTrackClearAll} disabled={filters.trackSelectionMode === 'none'}>
-                          {t('radtrack-map_tracks_none-button')}
-                        </button>
+                        <div class="control-with-info">
+                          <button onclick={handleTrackSelectAll} disabled={filters.trackSelectionMode === 'all' || !selectedTrackGroups.length}>
+                            {t('radtrack-map_tracks_all-button')}
+                          </button>
+                          <InfoTip text="Use all tracks from the selected individual datasets." />
+                        </div>
+                        <div class="control-with-info">
+                          <button onclick={handleTrackClearAll} disabled={filters.trackSelectionMode === 'none'}>
+                            {t('radtrack-map_tracks_none-button')}
+                          </button>
+                          <InfoTip text="Exclude every track from the selected individual datasets." />
+                        </div>
                       </div>
 
                       {#if selectedTrackGroups.length}
@@ -5414,6 +5468,7 @@
                                     <span class="selection-meta-row">{formatTrackOptionSummary(track)}</span>
                                     <span class="selection-meta-id">{t('radtrack-map_id_short-label', { id: shortId(track.id) })}</span>
                                   </span>
+                                  <InfoTip text="Toggle this specific track in the individual-dataset map query." />
                                 </label>
                               {/each}
                             </div>
@@ -5436,7 +5491,10 @@
 
           <details class="selector-accordion">
             <summary>
-              <span>{t('radtrack-map_time_filter-title')}</span>
+              <span class="field-title">
+                {t('radtrack-map_time_filter-title')}
+                <InfoTip text="Restrict readings by an exact date range or a rolling period relative to the current time." />
+              </span>
               <span class="settings-accordion-meta">
                 {#if filters.forceRecheck}
                   <span class="chip warning">{t('radtrack-map_force_recheck-chip')}</span>
@@ -5450,7 +5508,10 @@
 
             <div class="selection-stack time-filter-stack">
               <label>
-                <div class="muted">{t('radtrack-map_time_filter_mode-label')}</div>
+                <div class="muted field-title">
+                  {t('radtrack-map_time_filter_mode-label')}
+                  <InfoTip text="None includes all time; absolute uses fixed bounds; relative keeps a rolling recent window." />
+                </div>
                 <select bind:value={filters.timeFilterMode} onchange={handleTimeFilterModeChange}>
                   <option value="none">{t('radtrack-map_time_filter_mode_none-label')}</option>
                   <option value="absolute">{t('radtrack-map_time_filter_mode_absolute-label')}</option>
@@ -5460,7 +5521,10 @@
 
               {#if filters.timeFilterMode === 'absolute'}
                 <label>
-                  <div class="muted">{t('radtrack-map_time_filter_precision-label')}</div>
+                  <div class="muted field-title">
+                    {t('radtrack-map_time_filter_precision-label')}
+                    <InfoTip text="Choose whole calendar dates or exact local date-and-time values for the fixed range." />
+                  </div>
                   <select bind:value={filters.timeFilterPrecision} onchange={handleTimeFilterPrecisionChange}>
                     <option value="datetime">{t('radtrack-map_time_filter_precision_datetime-label')}</option>
                     <option value="date">{t('radtrack-map_time_filter_precision_date-label')}</option>
@@ -5469,50 +5533,65 @@
 
                 <div class="grid cols-2 time-filter-range-grid">
                   <label>
-                    <div class="muted">{t('radtrack-map_time_filter_start-label')}</div>
+                    <div class="muted field-title">
+                      {t('radtrack-map_time_filter_start-label')}
+                      <InfoTip text="Include readings at or after this date or timestamp." />
+                    </div>
                     {#if filters.timeFilterPrecision === 'date'}
                       <input bind:value={filters.timeFilterStart} oninput={handleFilterChange} type="date" />
                     {:else}
                       <input bind:value={filters.timeFilterStart} oninput={handleFilterChange} type="datetime-local" />
                     {/if}
                     <div class="time-filter-actions-row">
-                      <button
-                        aria-label={t('radtrack-map_time_filter_earliest-title')}
-                        disabled={timeBoundsLoading}
-                        onclick={setAbsoluteTimeFilterStartToEarliest}
-                        title={t('radtrack-map_time_filter_earliest-title')}
-                        type="button"
-                      >
-                        {t('radtrack-map_time_filter_earliest-button')}
-                      </button>
+                      <div class="control-with-info">
+                        <button
+                          aria-label={t('radtrack-map_time_filter_earliest-title')}
+                          disabled={timeBoundsLoading}
+                          onclick={setAbsoluteTimeFilterStartToEarliest}
+                          title={t('radtrack-map_time_filter_earliest-title')}
+                          type="button"
+                        >
+                          {t('radtrack-map_time_filter_earliest-button')}
+                        </button>
+                        <InfoTip text="Set the start to the earliest available reading in the current source selection." />
+                      </div>
                     </div>
                   </label>
 
                   <label>
-                    <div class="muted">{t('radtrack-map_time_filter_end-label')}</div>
+                    <div class="muted field-title">
+                      {t('radtrack-map_time_filter_end-label')}
+                      <InfoTip text="Include readings at or before this date or timestamp." />
+                    </div>
                     {#if filters.timeFilterPrecision === 'date'}
                       <input bind:value={filters.timeFilterEnd} oninput={handleFilterChange} type="date" />
                     {:else}
                       <input bind:value={filters.timeFilterEnd} oninput={handleFilterChange} type="datetime-local" />
                     {/if}
                     <div class="time-filter-actions-row">
-                      <button
-                        aria-label={t('radtrack-map_time_filter_latest-title')}
-                        disabled={timeBoundsLoading}
-                        onclick={setAbsoluteTimeFilterEndToLatest}
-                        title={t('radtrack-map_time_filter_latest-title')}
-                        type="button"
-                      >
-                        {t('radtrack-map_time_filter_latest-button')}
-                      </button>
-                      <button
-                        aria-label={t('radtrack-map_time_filter_now-title')}
-                        onclick={setAbsoluteTimeFilterEndToNow}
-                        title={t('radtrack-map_time_filter_now-title')}
-                        type="button"
-                      >
-                        {t('radtrack-map_time_filter_now-button')}
-                      </button>
+                      <div class="control-with-info">
+                        <button
+                          aria-label={t('radtrack-map_time_filter_latest-title')}
+                          disabled={timeBoundsLoading}
+                          onclick={setAbsoluteTimeFilterEndToLatest}
+                          title={t('radtrack-map_time_filter_latest-title')}
+                          type="button"
+                        >
+                          {t('radtrack-map_time_filter_latest-button')}
+                        </button>
+                        <InfoTip text="Set the end to the latest available reading in the current source selection." />
+                      </div>
+                      <div class="control-with-info">
+                        <button
+                          aria-label={t('radtrack-map_time_filter_now-title')}
+                          onclick={setAbsoluteTimeFilterEndToNow}
+                          title={t('radtrack-map_time_filter_now-title')}
+                          type="button"
+                        >
+                          {t('radtrack-map_time_filter_now-button')}
+                        </button>
+                        <InfoTip text="Set the end to the current local date and time." />
+                      </div>
                     </div>
                   </label>
                 </div>
@@ -5525,12 +5604,18 @@
                         onchange={handleTimeSliceEnabledChange}
                         type="checkbox"
                       />
-                      <span>{t('radtrack-map_time_slice_playback-label')}</span>
+                      <span class="field-title">
+                        {t('radtrack-map_time_slice_playback-label')}
+                        <InfoTip text="Divide the absolute range into intervals and step or animate through them on the map." />
+                      </span>
                     </label>
                     {#if timeSliceEnabled}
-                      <button onclick={openTimeSliceConfig} type="button">
-                        {t('radtrack-map_time_slice_configure-button')}
-                      </button>
+                      <div class="control-with-info">
+                        <button onclick={openTimeSliceConfig} type="button">
+                          {t('radtrack-map_time_slice_configure-button')}
+                        </button>
+                        <InfoTip text="Choose the duration of each playback interval." />
+                      </div>
                     {/if}
                   </div>
 
@@ -5538,9 +5623,12 @@
                     {#if timeSliceNeedsLargeLoadConfirmation}
                       <div class="time-slice-confirm-row">
                         <span class="warning-text">{timeSliceSummary}</span>
-                        <button onclick={confirmTimeSliceLargeLoad} type="button">
-                          {t('radtrack-map_time_slice_continue-button')}
-                        </button>
+                        <div class="control-with-info">
+                          <button onclick={confirmTimeSliceLargeLoad} type="button">
+                            {t('radtrack-map_time_slice_continue-button')}
+                          </button>
+                          <InfoTip text="Confirm the larger source-data load needed to prepare these time slices." />
+                        </div>
                       </div>
                     {:else}
                       <div class="time-slice-summary">{timeSliceSummary}</div>
@@ -5579,20 +5667,24 @@
                             <option value={speed}>{speed}x</option>
                           {/each}
                         </select>
+                        <InfoTip text="The arrow buttons step between intervals, Play animates them, and the speed controls playback rate." />
                       </div>
 
-                      <input
-                        aria-label={t('radtrack-map_time_slice-title')}
-                        disabled={!activeTimeSliceWindow || timeSliceSourceLoading}
-                        max={Math.max(0, activeTimeSliceWindows.length - 1)}
-                        min="0"
-                        oninput={(event) => setTimeSlicePosition({
-                          index: Number((event.currentTarget as HTMLInputElement).value)
-                        })}
-                        step="1"
-                        type="range"
-                        value={Math.max(0, Math.min(timeSliceIndex, Math.max(0, activeTimeSliceWindows.length - 1)))}
-                      />
+                      <div class="control-with-info time-slice-position-control">
+                        <input
+                          aria-label={t('radtrack-map_time_slice-title')}
+                          disabled={!activeTimeSliceWindow || timeSliceSourceLoading}
+                          max={Math.max(0, activeTimeSliceWindows.length - 1)}
+                          min="0"
+                          oninput={(event) => setTimeSlicePosition({
+                            index: Number((event.currentTarget as HTMLInputElement).value)
+                          })}
+                          step="1"
+                          type="range"
+                          value={Math.max(0, Math.min(timeSliceIndex, Math.max(0, activeTimeSliceWindows.length - 1)))}
+                        />
+                        <InfoTip text="Jump directly to an interval within the configured absolute range." />
+                      </div>
 
                       <div class="time-slice-meta-row">
                         <label class="checkbox-field time-slice-current-toggle" title={t('radtrack-map_time_slice_current_only-title')}>
@@ -5601,7 +5693,10 @@
                             onchange={handleTimeSliceCurrentOnlyChange}
                             type="checkbox"
                           />
-                          <span>{t('radtrack-map_time_slice_current_only-label')}</span>
+                          <span class="field-title">
+                            {t('radtrack-map_time_slice_current_only-label')}
+                            <InfoTip text="Show only the active interval instead of accumulating all intervals up to the active one." />
+                          </span>
                         </label>
                         <span class="chip subtle">{timeSliceIntervalLabel}</span>
                         {#if timeSliceSourceLoading}
@@ -5618,7 +5713,10 @@
               {:else if filters.timeFilterMode === 'relative'}
                 <div class="grid cols-2 time-filter-range-grid">
                   <label>
-                    <div class="muted">{t('radtrack-map_time_filter_since_amount-label')}</div>
+                    <div class="muted field-title">
+                      {t('radtrack-map_time_filter_since_amount-label')}
+                      <InfoTip text="Number of recent hours or days included in the rolling time window." />
+                    </div>
                     <input
                       bind:value={filters.timeFilterRelativeAmount}
                       min="1"
@@ -5629,7 +5727,10 @@
                   </label>
 
                   <label>
-                    <div class="muted">{t('radtrack-map_time_filter_since_unit-label')}</div>
+                    <div class="muted field-title">
+                      {t('radtrack-map_time_filter_since_unit-label')}
+                      <InfoTip text="Unit used with the relative time amount." />
+                    </div>
                     <select bind:value={filters.timeFilterRelativeUnit} onchange={handleFilterChange}>
                       <option value="hours">{t('radtrack-map_time_filter_hours-label')}</option>
                       <option value="days">{t('radtrack-map_time_filter_days-label')}</option>
@@ -5641,7 +5742,10 @@
 
               <label class="checkbox-field">
                 <input bind:checked={filters.forceRecheck} onchange={handleFilterChange} type="checkbox" />
-                <span>{t('radtrack-map_force_recheck-label')}</span>
+                <span class="field-title">
+                  {t('radtrack-map_force_recheck-label')}
+                  <InfoTip text="Bypass reusable aggregate results and recompute against the current source data for the next update." />
+                </span>
               </label>
 
               {#if timeFilterValidationMessage}
@@ -5655,7 +5759,10 @@
           </div>
 
           <label>
-            <div class="muted">{t('radtrack-common_metric-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_metric-label')}
+              <InfoTip text="Choose the reading property used for raw-point coloring or aggregate statistics." />
+            </div>
             <select bind:value={filters.metric} onchange={handleFilterChange}>
               {#each pendingAvailableMetricFields as field}
                 <option value={field.propKey}>{getPendingMetricLabel(field.propKey)}</option>
@@ -5664,7 +5771,10 @@
           </label>
 
           <label>
-            <div class="muted">{t('radtrack-common_mode-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_mode-label')}
+              <InfoTip text="Raw displays individual readings; aggregate groups nearby readings into colored spatial cells." />
+            </div>
             <select bind:value={filters.mode} onchange={handleFilterChange}>
               <option value="aggregate">{t('radtrack-common_aggregates-label')}</option>
               <option value="raw">{t('radtrack-common_raw_points-label')}</option>
@@ -5673,7 +5783,10 @@
 
           {#if filters.mode === 'aggregate'}
             <label>
-              <div class="muted">{t('radtrack-common_shape-label')}</div>
+              <div class="muted field-title">
+                {t('radtrack-common_shape-label')}
+                <InfoTip text="Choose the geometry used to group readings into aggregate cells." />
+              </div>
               <select bind:value={filters.shape} onchange={handleFilterChange}>
                 <option value="hexagon">{t('radtrack-common_hexagon-label')}</option>
                 <option value="square">{t('radtrack-common_square-label')}</option>
@@ -5684,7 +5797,10 @@
 
           {#if filters.mode === 'aggregate'}
             <label>
-              <div class="muted">{t('radtrack-map_aggregate_stat-label')}</div>
+              <div class="muted field-title">
+                {t('radtrack-map_aggregate_stat-label')}
+                <InfoTip text="Select which statistic from each cell determines its displayed value and color." />
+              </div>
               <select bind:value={filters.aggregateStat} onchange={handleFilterChange}>
                 <option value="min">{t('radtrack-common_min-label')}</option>
                 <option value="max">{t('radtrack-common_max-label')}</option>
@@ -5700,12 +5816,18 @@
             <div class="form-grid field-group">
               <label class="checkbox-field">
                 <input bind:checked={filters.autoCellSize} onchange={handleAutoCellSizeToggle} type="checkbox" />
-                <span>{t('radtrack-map_auto_cell_size-label')}</span>
+                <span class="field-title">
+                  {t('radtrack-map_auto_cell_size-label')}
+                  <InfoTip text="Choose a cell size from the current zoom so the aggregate map remains readable and efficient." />
+                </span>
               </label>
 
               {#if !filters.autoCellSize}
                 <label>
-                  <div class="muted">{t('radtrack-map_cell_size_manual-label')}</div>
+                  <div class="muted field-title">
+                    {t('radtrack-map_cell_size_manual-label')}
+                    <InfoTip text="Set the approximate aggregate cell width in meters. Larger cells combine more readings." />
+                  </div>
                   <input
                     bind:value={filters.cellSizeMeters}
                     min="10"
@@ -5726,34 +5848,52 @@
 
           <label class="checkbox-field">
             <input bind:checked={filters.applyExcludeAreas} onchange={handleFilterChange} type="checkbox" />
-            <span>{t('radtrack-map_apply_exclude_areas-label')}</span>
+            <span class="field-title">
+              {t('radtrack-map_apply_exclude_areas-label')}
+              <InfoTip text="Apply saved dataset exclusion and compression areas before rendering the current query." />
+            </span>
           </label>
         </div>
       </section>
 
       <section class="panel">
-        <h2>{t('radtrack-map_display_options-title')}</h2>
+        <div class="title-with-info">
+          <h2>{t('radtrack-map_display_options-title')}</h2>
+          <InfoTip text="Control aggregate colors and which fields appear when opening a map reading popup." />
+        </div>
 
         {#if activeMode === 'aggregate'}
           <div class="form-grid">
             <label class="checkbox-field">
               <input bind:checked={colorScaleSettings.auto} onchange={handleAutoColorScaleToggle} type="checkbox" />
-              <span>{t('radtrack-map_auto_scale-label')}</span>
+              <span class="field-title">
+                {t('radtrack-map_auto_scale-label')}
+                <InfoTip text="Derive low, middle, and high color thresholds from the currently displayed aggregate values." />
+              </span>
             </label>
 
             <div class="grid cols-3 scale-grid">
               <label>
-                <div class="muted">{t('radtrack-map_scale_low-label')}</div>
+                <div class="muted field-title">
+                  {t('radtrack-map_scale_low-label')}
+                  <InfoTip text="Values at or below this threshold use the low end of the color scale." />
+                </div>
                 <input bind:value={colorScaleSettings.low} disabled={colorScaleSettings.auto} step="any" type="number" />
               </label>
 
               <label>
-                <div class="muted">{t('radtrack-map_scale_mid-label')}</div>
+                <div class="muted field-title">
+                  {t('radtrack-map_scale_mid-label')}
+                  <InfoTip text="Middle reference value for the aggregate color gradient." />
+                </div>
                 <input bind:value={colorScaleSettings.mid} disabled={colorScaleSettings.auto} step="any" type="number" />
               </label>
 
               <label>
-                <div class="muted">{t('radtrack-map_scale_high-label')}</div>
+                <div class="muted field-title">
+                  {t('radtrack-map_scale_high-label')}
+                  <InfoTip text="Values at or above this threshold use the high end of the color scale." />
+                </div>
                 <input bind:value={colorScaleSettings.high} disabled={colorScaleSettings.auto} step="any" type="number" />
               </label>
             </div>
@@ -5762,7 +5902,10 @@
 
         <details class="settings-accordion">
           <summary>
-            <span>{t('radtrack-map_popup_fields-title')}</span>
+            <span class="field-title">
+              {t('radtrack-map_popup_fields-title')}
+              <InfoTip text="Expand the list of reading properties that can appear when a raw point is selected." />
+            </span>
               <span class="settings-accordion-meta">
               <span class="chip subtle">{enabledPopupFieldCount}/{popupSelectableFields.length}</span>
               <span aria-hidden="true" class="settings-accordion-icon"></span>
@@ -5791,7 +5934,10 @@
                   }}
                   type="checkbox"
                 />
-                <span>{getPendingPopupFieldLabel(field.propKey)}</span>
+                <span class="field-title">
+                  {getPendingPopupFieldLabel(field.propKey)}
+                  <InfoTip text={`Show or hide the ${field.propKey} property in map reading popups.`} />
+                </span>
               </label>
             {/each}
           </div>
@@ -5799,7 +5945,10 @@
       </section>
 
       <section class="panel">
-        <h2>{t('radtrack-common_viewport-label')}</h2>
+        <div class="title-with-info">
+          <h2>{t('radtrack-common_viewport-label')}</h2>
+          <InfoTip text="Live bounds and counts for the currently visible map area and zoom level." />
+        </div>
         <div class="grid">
           <span class="chip start">{t('radtrack-common_lat_range-label', { min: viewport.minLat.toFixed(4), max: viewport.maxLat.toFixed(4) })}</span>
           <span class="chip start">{t('radtrack-common_lon_range-label', { min: viewport.minLon.toFixed(4), max: viewport.maxLon.toFixed(4) })}</span>
@@ -5813,7 +5962,10 @@
 
       {#if selectedPoint}
         <section class="panel">
-          <h2>{t('radtrack-common_selected_reading-label')}</h2>
+          <div class="title-with-info">
+            <h2>{t('radtrack-common_selected_reading-label')}</h2>
+            <InfoTip text="Details for the raw reading most recently selected on the map." />
+          </div>
           <div class="grid">
             <span class="chip start">{formatTime(selectedPoint.occurredAt)}</span>
             <span class="chip start">{formatTime(selectedPoint.receivedAt)}</span>
@@ -5835,7 +5987,10 @@
               <p class="muted">{selectedPoint.comment}</p>
             {/if}
             {#if $sessionStore.user?.role !== 'view_only'}
-              <button class="danger" onclick={hideSelectedPoint}>{t('radtrack-common_hide_point-button')}</button>
+              <div class="control-with-info">
+                <button class="danger" onclick={hideSelectedPoint}>{t('radtrack-common_hide_point-button')}</button>
+                <InfoTip text="Hide this reading from normal map queries without deleting it from the track." />
+              </div>
             {/if}
           </div>
         </section>
@@ -5910,18 +6065,30 @@
               role="dialog"
             >
               <header class="map-config-modal-header">
-                <h2 id="time-slice-config-title">{t('radtrack-map_time_slice_configure-title')}</h2>
-                <button onclick={closeTimeSliceConfig} type="button">{t('radtrack-common_close-button')}</button>
+                <div class="title-with-info">
+                  <h2 id="time-slice-config-title">{t('radtrack-map_time_slice_configure-title')}</h2>
+                  <InfoTip text="Set the duration represented by one step in time-slice playback." />
+                </div>
+                <div class="control-with-info">
+                  <button onclick={closeTimeSliceConfig} type="button">{t('radtrack-common_close-button')}</button>
+                  <InfoTip text="Close without applying changes made in this dialog." />
+                </div>
               </header>
 
               <div class="grid cols-2 time-filter-range-grid">
                 <label>
-                  <div class="muted">{t('radtrack-map_time_slice_interval_amount-label')}</div>
+                  <div class="muted field-title">
+                    {t('radtrack-map_time_slice_interval_amount-label')}
+                    <InfoTip text="Positive number of units in each playback interval." />
+                  </div>
                   <input bind:value={timeSliceDraftSettings.amount} min="1" step="1" type="number" />
                 </label>
 
                 <label>
-                  <div class="muted">{t('radtrack-map_time_slice_interval_unit-label')}</div>
+                  <div class="muted field-title">
+                    {t('radtrack-map_time_slice_interval_unit-label')}
+                    <InfoTip text="Measure each interval in minutes, hours, or days." />
+                  </div>
                   <select bind:value={timeSliceDraftSettings.unit}>
                     <option value="days">{t('radtrack-map_time_filter_days-label')}</option>
                     <option value="hours">{t('radtrack-map_time_filter_hours-label')}</option>
@@ -5931,10 +6098,16 @@
               </div>
 
               <div class="actions">
-                <button onclick={closeTimeSliceConfig} type="button">{t('radtrack-common_cancel-button')}</button>
-                <button class="primary" onclick={applyTimeSliceConfig} type="button">
-                  {t('radtrack-common_save-button')}
-                </button>
+                <div class="control-with-info">
+                  <button onclick={closeTimeSliceConfig} type="button">{t('radtrack-common_cancel-button')}</button>
+                  <InfoTip text="Discard the draft interval and close this dialog." />
+                </div>
+                <div class="control-with-info">
+                  <button class="primary" onclick={applyTimeSliceConfig} type="button">
+                    {t('radtrack-common_save-button')}
+                  </button>
+                  <InfoTip text="Apply this interval to time-slice playback for the current map session." />
+                </div>
               </div>
             </section>
           </div>
@@ -5943,7 +6116,10 @@
         <div class="map-overlay map-overlay-basemap">
           <section class="panel map-overlay-card map-overlay-basemap-card">
             <label class="form-grid">
-              <div class="muted">{t('radtrack-map_basemap-label')}</div>
+              <div class="muted field-title">
+                {t('radtrack-map_basemap-label')}
+                <InfoTip text="Choose the background map tiles. This changes visual context, not RadTrack readings or query results." />
+              </div>
               <select bind:value={basemapKey} onchange={handleBasemapChange}>
                 {#each basemapOptions as basemap}
                   <option value={basemap.key}>{basemap.label}</option>
@@ -5957,7 +6133,10 @@
           <div class:is-wide={legendNeedsWide} class="map-overlay map-overlay-legend">
             <details class="panel map-overlay-card" open>
               <summary>
-                <span>{t('radtrack-map_legend-title')}</span>
+                <span class="field-title">
+                  {t('radtrack-map_legend-title')}
+                  <InfoTip text="Relates aggregate-cell colors to the active metric, statistic, and scale thresholds." />
+                </span>
                 <span class="chip subtle">{activeLegendSummary}</span>
               </summary>
 
@@ -6305,7 +6484,7 @@
 
   .selection-item {
     display: grid;
-    grid-template-columns: auto 1fr;
+    grid-template-columns: auto minmax(0, 1fr) auto;
     gap: var(--space-3);
     align-items: center;
     padding: 0.55rem 0.7rem;
@@ -6428,6 +6607,14 @@
 
   .time-slice-panel input[type='range'] {
     width: 100%;
+  }
+
+  .time-slice-position-control {
+    width: 100%;
+  }
+
+  .time-slice-position-control input[type='range'] {
+    min-width: 0;
   }
 
   .warning-text {

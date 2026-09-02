@@ -2,6 +2,7 @@
 
 <script lang="ts">
   import { goto } from '$app/navigation';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
 
@@ -21,6 +22,9 @@
 </script>
 
 <section class="panel">
-  <h1>{t('radtrack-app_title')}</h1>
+  <div class="title-with-info">
+    <h1>{t('radtrack-app_title')}</h1>
+    <InfoTip text="RadTrack imports, organizes, maps, combines, and exports radiation track data." />
+  </div>
   <p class="muted">{t('radtrack-root_redirecting-description')}</p>
 </section>

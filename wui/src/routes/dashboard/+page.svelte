@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
 
   let data = $state<any>(null);
@@ -33,7 +34,10 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radtrack-dashboard_title')}</h1>
+    <div class="title-with-info">
+      <h1>{t('radtrack-dashboard_title')}</h1>
+      <InfoTip text="A quick account-level overview of available datasets, imports, failures, and recent activity." />
+    </div>
     <p class="muted">{t('radtrack-dashboard_description')}</p>
   </div>
 </div>
@@ -49,15 +53,24 @@
 {:else}
   <section class="grid cols-3">
     <article class="metric-card">
-      <div class="faint">{t('radtrack-datasets_title')}</div>
+      <div class="faint field-title">
+        {t('radtrack-datasets_title')}
+        <InfoTip text="The number of datasets currently accessible to your account." />
+      </div>
       <h2>{data.stats.datasetCount}</h2>
     </article>
     <article class="metric-card">
-      <div class="faint">{t('radtrack-dashboard_recent_uploads-title')}</div>
+      <div class="faint field-title">
+        {t('radtrack-dashboard_recent_uploads-title')}
+        <InfoTip text="The number of recent upload records included in this dashboard summary." />
+      </div>
       <h2>{data.stats.uploadCount}</h2>
     </article>
     <article class="metric-card">
-      <div class="faint">{t('radtrack-dashboard_failed_imports-label')}</div>
+      <div class="faint field-title">
+        {t('radtrack-dashboard_failed_imports-label')}
+        <InfoTip text="Imports that did not complete successfully and may need investigation or a retry." />
+      </div>
       <h2>{data.stats.failedImportCount}</h2>
     </article>
   </section>
@@ -65,7 +78,10 @@
   <section class="grid cols-2">
     <article class="panel">
       <div class="page-header">
-        <h2>{t('radtrack-dashboard_recent_datasets-title')}</h2>
+        <div class="title-with-info">
+          <h2>{t('radtrack-dashboard_recent_datasets-title')}</h2>
+          <InfoTip text="Recently available datasets, including shared datasets, with access and track counts." />
+        </div>
         <a href="/datasets">{t('radtrack-common_open-button')}</a>
       </div>
       <div class="table-wrap">
@@ -92,7 +108,10 @@
 
     <article class="panel">
       <div class="page-header">
-        <h2>{t('radtrack-dashboard_recent_uploads-title')}</h2>
+        <div class="title-with-info">
+          <h2>{t('radtrack-dashboard_recent_uploads-title')}</h2>
+          <InfoTip text="The newest import uploads and their processing status." />
+        </div>
         <a href="/import-export">{t('radtrack-common_import_export-button')}</a>
       </div>
       <div class="table-wrap">
@@ -120,7 +139,10 @@
 
   <section class="panel">
     <div class="page-header">
-      <h2>{t('radtrack-audit_title')}</h2>
+      <div class="title-with-info">
+        <h2>{t('radtrack-audit_title')}</h2>
+        <InfoTip text="Recent recorded actions that help explain changes to data and access." />
+      </div>
       <a href="/audit">{t('radtrack-common_open-button')}</a>
     </div>
     <div class="table-wrap">

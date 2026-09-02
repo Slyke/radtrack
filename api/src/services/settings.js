@@ -17,12 +17,14 @@ const defaultSettingsFromConfig = ({ runtimeConfig }) => ({
 
 const fromRows = ({ rows }) => Object.fromEntries(rows.map((row) => [row.key_name, row.value_json]));
 const userSettingKeys = {
-  cellCacheRefreshTtlOnRead: 'aggregation.cellCacheRefreshTtlOnRead'
+  cellCacheRefreshTtlOnRead: 'aggregation.cellCacheRefreshTtlOnRead',
+  showInfoIcons: 'ui.showInfoIcons'
 };
 const isUserSettingKey = ({ key }) => Object.prototype.hasOwnProperty.call(userSettingKeys, key);
 
 const defaultUserSettingsFromConfig = ({ runtimeConfig }) => ({
-  cellCacheRefreshTtlOnRead: runtimeConfig.aggregation.cellCacheRefreshTtlOnRead === true
+  cellCacheRefreshTtlOnRead: runtimeConfig.aggregation.cellCacheRefreshTtlOnRead === true,
+  showInfoIcons: true
 });
 
 export const createSettingsService = ({ db, runtimeConfig }) => {
@@ -94,6 +96,9 @@ export const createSettingsService = ({ db, runtimeConfig }) => {
       cellCacheRefreshTtlOnRead: typeof rowsByKey[userSettingKeys.cellCacheRefreshTtlOnRead] === 'boolean'
         ? rowsByKey[userSettingKeys.cellCacheRefreshTtlOnRead]
         : defaults.cellCacheRefreshTtlOnRead,
+      showInfoIcons: typeof rowsByKey[userSettingKeys.showInfoIcons] === 'boolean'
+        ? rowsByKey[userSettingKeys.showInfoIcons]
+        : defaults.showInfoIcons,
       defaults
     };
   };
@@ -128,6 +133,19 @@ export const createSettingsService = ({ db, runtimeConfig }) => {
       throw createAppError({
         caller: 'settings::updateUserSettings',
         reason: 'cellCacheRefreshTtlOnRead must be a boolean.',
+        errorKey: 'REQUEST_INVALID',
+        correlationId,
+        status: 400
+      });
+    }
+
+    if (
+      'showInfoIcons' in updates
+      && typeof updates.showInfoIcons !== 'boolean'
+    ) {
+      throw createAppError({
+        caller: 'settings::updateUserSettings',
+        reason: 'showInfoIcons must be a boolean.',
         errorKey: 'REQUEST_INVALID',
         correlationId,
         status: 400

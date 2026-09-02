@@ -6,6 +6,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import ExcludeAreaEditorMap from '$lib/components/ExcludeAreaEditorMap.svelte';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { ApiError, apiFetch } from '$lib/api/client';
   import { getDefaultSupportedFields, mergePopupFields } from '$lib/datalog-fields';
   import { localeStore, translateMessage } from '$lib/i18n';
@@ -429,18 +430,30 @@
 {:else}
   <div class="detail-page-header">
     <div class="page-header">
-      <h1>{dataset.name}</h1>
+      <div class="title-with-info">
+        <h1>{dataset.name}</h1>
+        <InfoTip text="Review this dataset’s tracks, measurement fields, sharing, and geographic exclusion rules." />
+      </div>
       <div class="actions">
-        <a class="button-link" href="/datasets">{t('radtrack-common_back-button')}</a>
+        <div class="control-with-info">
+          <a class="button-link" href="/datasets">{t('radtrack-common_back-button')}</a>
+          <InfoTip text="Return to the list of all datasets available to you." />
+        </div>
       </div>
     </div>
     <div class="page-header detail-page-header-meta-row">
       <p class="muted detail-page-header-description">{dataset.description || t('radtrack-common_no-description')}</p>
       <div class="actions">
         <span class="chip start">{dataset.accessLevel}</span>
-        <a class="button-link" href="/map">{t('radtrack-dataset_detail_open_map-button')}</a>
+        <div class="control-with-info">
+          <a class="button-link" href="/map">{t('radtrack-dataset_detail_open_map-button')}</a>
+          <InfoTip text="Open the map, where this dataset can be selected and explored spatially." />
+        </div>
         {#if dataset.accessLevel === 'edit'}
-          <button class="danger" onclick={deleteDataset}>{t('radtrack-common_danger-delete-button')}</button>
+          <div class="control-with-info">
+            <button class="danger" onclick={deleteDataset}>{t('radtrack-common_danger-delete-button')}</button>
+            <InfoTip text="Permanently delete this dataset and all tracks and readings it owns after confirmation." />
+          </div>
         {/if}
       </div>
     </div>
@@ -448,7 +461,10 @@
 
   <section class="panel">
     <div class="page-header">
-      <h2>{t('radtrack-common_tracks-label')}</h2>
+      <div class="title-with-info">
+        <h2>{t('radtrack-common_tracks-label')}</h2>
+        <InfoTip text="Imported and live-ingest tracks contained by this dataset, with source, device, row, and warning details." />
+      </div>
     </div>
     <div class="table-wrap">
       <table>
@@ -487,13 +503,19 @@
                 {#if dataset.accessLevel === 'edit'}
                   <td>
                     <div class="actions">
-                      <a class="button-link" href={`/datalogs/${track.id}`}>{t('radtrack-common_edit-label')}</a>
-                      <button
-                        class="danger"
-                        onclick={() => deleteTrack({ trackId: track.id, trackName: track.datalogName })}
-                      >
-                        {t('radtrack-common_danger-delete-button')}
-                      </button>
+                      <div class="control-with-info">
+                        <a class="button-link" href={`/datalogs/${track.id}`}>{t('radtrack-common_edit-label')}</a>
+                        <InfoTip text="Open this track’s metadata, supported fields, access, ingest, and reading controls." />
+                      </div>
+                      <div class="control-with-info">
+                        <button
+                          class="danger"
+                          onclick={() => deleteTrack({ trackId: track.id, trackName: track.datalogName })}
+                        >
+                          {t('radtrack-common_danger-delete-button')}
+                        </button>
+                        <InfoTip text="Permanently remove this track and its readings from the dataset after confirmation." />
+                      </div>
                     </div>
                   </td>
                 {/if}
@@ -514,24 +536,36 @@
         }}
       >
         <div class="form-grid" id="live-track-form">
-          <h3>{t('radtrack-dataset_live_track_create-title')}</h3>
+          <div class="title-with-info">
+            <h3>{t('radtrack-dataset_live_track_create-title')}</h3>
+            <InfoTip text="Create an empty track that accepts readings through a dedicated ingest identifier and API key." />
+          </div>
           <p class="muted">{t('radtrack-dataset_live_track_description')}</p>
-          <input
-            aria-describedby={liveTrackFormError ? 'live-track-form-error' : undefined}
-            aria-invalid={Boolean(liveTrackFormError)}
-            bind:this={liveTrackNameInput}
-            bind:value={liveTrackForm.name}
-            onblur={trimLiveTrackName}
-            oninput={() => {
-              liveTrackFormError = null;
-            }}
-            placeholder={t('radtrack-dataset_live_track_name-placeholder')}
-          />
+          <label>
+            <span class="muted field-title">
+              {t('radtrack-common_name-label')}
+              <InfoTip text="A recognizable name for this live stream of readings." />
+            </span>
+            <input
+              aria-describedby={liveTrackFormError ? 'live-track-form-error' : undefined}
+              aria-invalid={Boolean(liveTrackFormError)}
+              bind:this={liveTrackNameInput}
+              bind:value={liveTrackForm.name}
+              onblur={trimLiveTrackName}
+              oninput={() => {
+                liveTrackFormError = null;
+              }}
+              placeholder={t('radtrack-dataset_live_track_name-placeholder')}
+            />
+          </label>
           {#if liveTrackFormError}
             <p class="field-error" id="live-track-form-error">{liveTrackFormError}</p>
           {/if}
           <div class="actions">
-            <button class="primary" type="submit">{t('radtrack-dataset_live_track_create-button')}</button>
+            <div class="control-with-info">
+              <button class="primary" type="submit">{t('radtrack-dataset_live_track_create-button')}</button>
+              <InfoTip text="Create the live track; generate an ingest key from the new track’s detail page before sending readings." />
+            </div>
           </div>
         </div>
       </form>
@@ -539,7 +573,10 @@
   </section>
 
   <section class="panel">
-    <h2>{t('radtrack-dataset_field_inventory-title')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-dataset_field_inventory-title')}</h2>
+      <InfoTip text="Fields supported by tracks in this dataset, grouped by property key with links to the contributing tracks." />
+    </div>
     <p class="muted">{t('radtrack-dataset_field_inventory-description')}</p>
 
     {#if datasetFieldInventory.length}
@@ -593,7 +630,10 @@
   <section class="panel">
     <details class="sharing-accordion">
       <summary>
-        <span>{t('radtrack-dataset_sharing-title')}</span>
+        <span class="field-title">
+          {t('radtrack-dataset_sharing-title')}
+          <InfoTip text="Grant another RadTrack user view or edit access to this dataset. Track-level shares are managed from each track." />
+        </span>
         <span class="exclude-editor-summary">
           <span class="chip subtle">{dataset.shares.length}</span>
           <span aria-hidden="true" class="exclude-editor-icon"></span>
@@ -605,20 +645,35 @@
 
         {#if dataset.accessLevel === 'edit'}
           <div class="form-grid sharing-controls">
-            <select bind:value={shareForm.targetUserId}>
-              <option value="">{t('radtrack-common_select_user-option')}</option>
-              {#each shareTargets as target}
-                {#if target.id !== $sessionStore.user?.id}
-                  <option value={target.id}>{target.username} ({target.role})</option>
-                {/if}
-              {/each}
-            </select>
-            <select bind:value={shareForm.accessLevel}>
-              <option value="view">{t('radtrack-common_view-label')}</option>
-              <option value="edit">{t('radtrack-common_edit-label')}</option>
-            </select>
+            <label>
+              <span class="muted field-title">
+                {t('radtrack-common_user-label')}
+                <InfoTip text="Choose the user who should receive access. Your own account is excluded." />
+              </span>
+              <select bind:value={shareForm.targetUserId}>
+                <option value="">{t('radtrack-common_select_user-option')}</option>
+                {#each shareTargets as target}
+                  {#if target.id !== $sessionStore.user?.id}
+                    <option value={target.id}>{target.username} ({target.role})</option>
+                  {/if}
+                {/each}
+              </select>
+            </label>
+            <label>
+              <span class="muted field-title">
+                {t('radtrack-common_access-label')}
+                <InfoTip text="View permits reading and mapping; edit also permits changes and destructive actions on the shared dataset." />
+              </span>
+              <select bind:value={shareForm.accessLevel}>
+                <option value="view">{t('radtrack-common_view-label')}</option>
+                <option value="edit">{t('radtrack-common_edit-label')}</option>
+              </select>
+            </label>
             <div class="actions">
-              <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
+              <div class="control-with-info">
+                <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
+                <InfoTip text="Create or update this user’s direct access grant to the dataset." />
+              </div>
             </div>
           </div>
         {/if}
@@ -644,7 +699,10 @@
                     <td>{share.accessLevel}</td>
                     <td>
                       {#if dataset.accessLevel === 'edit'}
-                        <button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button>
+                        <span class="control-with-info">
+                          <button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button>
+                          <InfoTip text="Revoke this user’s direct dataset share. Other inherited access is unaffected." />
+                        </span>
                       {/if}
                     </td>
                   </tr>
@@ -663,7 +721,10 @@
     <section class="panel">
       <details class="exclude-editor-accordion">
         <summary>
-          <span>{t('radtrack-dataset_exclude_editor-title')}</span>
+          <span class="field-title">
+            {t('radtrack-dataset_exclude_editor-title')}
+            <InfoTip text="Draw and configure circular regions that remove readings or compress dense readings during map and export queries." />
+          </span>
           <span class="exclude-editor-summary">
             <span class="chip subtle">{t('radtrack-common_circle-label')}</span>
             <span aria-hidden="true" class="exclude-editor-icon"></span>
@@ -688,12 +749,18 @@
             <span class="chip subtle">{t('radtrack-common_circle-label')}</span>
 
             <label>
-              <div class="muted">{t('radtrack-common_label-label')}</div>
+              <div class="muted field-title">
+                {t('radtrack-common_label-label')}
+                <InfoTip text="A recognizable name for the excluded or compressed geographic area." />
+              </div>
               <input bind:value={excludeAreaForm.label} placeholder={t('radtrack-common_label-placeholder')} />
             </label>
 
             <label>
-              <div class="muted">{t('radtrack-common_type-label')}</div>
+              <div class="muted field-title">
+                {t('radtrack-common_type-label')}
+                <InfoTip text="Hard remove excludes all matching readings; compress keeps a limited representative subset." />
+              </div>
               <select bind:value={excludeAreaForm.effectType}>
                 <option value="hard_remove">{t('radtrack-dataset_exclude_effect_hard_remove')}</option>
                 <option value="compress">{t('radtrack-dataset_exclude_effect_compress')}</option>
@@ -702,40 +769,82 @@
 
             <label class="checkbox-field">
               <input bind:checked={excludeAreaForm.applyByDefaultOnExport} type="checkbox" />
-              <span>{t('radtrack-common_apply_export_default-label')}</span>
+              <span class="field-title">
+                {t('radtrack-common_apply_export_default-label')}
+                <InfoTip text="Automatically apply this area when an export uses the dataset’s default exclusion behavior." />
+              </span>
             </label>
 
             <div class="form-grid exclude-mode-panel">
               <p class="muted">{t('radtrack-dataset_exclude_circle_help')}</p>
-              <input bind:value={circleForm.latitude} placeholder={t('radtrack-common_latitude-label')} />
-              <input bind:value={circleForm.longitude} placeholder={t('radtrack-common_longitude-label')} />
-              <input bind:value={circleForm.radiusMeters} placeholder={t('radtrack-common_radius_meters-placeholder')} />
+              <label>
+                <span class="muted field-title">
+                  {t('radtrack-common_latitude-label')}
+                  <InfoTip text="Latitude of the circle center. Clicking the editor map fills this value." />
+                </span>
+                <input bind:value={circleForm.latitude} placeholder={t('radtrack-common_latitude-label')} />
+              </label>
+              <label>
+                <span class="muted field-title">
+                  {t('radtrack-common_longitude-label')}
+                  <InfoTip text="Longitude of the circle center. Clicking the editor map fills this value." />
+                </span>
+                <input bind:value={circleForm.longitude} placeholder={t('radtrack-common_longitude-label')} />
+              </label>
+              <label>
+                <span class="muted field-title">
+                  {t('radtrack-common_radius_meters-placeholder')}
+                  <InfoTip text="Radius of the circle in meters." />
+                </span>
+                <input bind:value={circleForm.radiusMeters} placeholder={t('radtrack-common_radius_meters-placeholder')} />
+              </label>
 
               {#if excludeAreaForm.effectType === 'compress'}
                 <div class="grid cols-2">
-                  <input bind:value={excludeAreaForm.compressMinPoints} placeholder={t('radtrack-dataset_exclude_compress_min-placeholder')} />
-                  <input bind:value={excludeAreaForm.compressMaxPoints} placeholder={t('radtrack-dataset_exclude_compress_max-placeholder')} />
+                  <label>
+                    <span class="muted field-title">
+                      {t('radtrack-dataset_exclude_compress_min-placeholder')}
+                      <InfoTip text="Minimum number of representative readings retained inside the area." />
+                    </span>
+                    <input bind:value={excludeAreaForm.compressMinPoints} placeholder={t('radtrack-dataset_exclude_compress_min-placeholder')} />
+                  </label>
+                  <label>
+                    <span class="muted field-title">
+                      {t('radtrack-dataset_exclude_compress_max-placeholder')}
+                      <InfoTip text="Maximum number of representative readings retained inside the area." />
+                    </span>
+                    <input bind:value={excludeAreaForm.compressMaxPoints} placeholder={t('radtrack-dataset_exclude_compress_max-placeholder')} />
+                  </label>
                 </div>
                 <p class="muted">{t('radtrack-dataset_exclude_compress_help')}</p>
               {/if}
 
               <div class="actions">
-                <button onclick={() => {
-                  circleForm = {
-                    ...circleForm,
-                    latitude: '',
-                    longitude: ''
-                  };
-                }}>
-                  {t('radtrack-common_clear-button')}
-                </button>
+                <div class="control-with-info">
+                  <button onclick={() => {
+                    circleForm = {
+                      ...circleForm,
+                      latitude: '',
+                      longitude: ''
+                    };
+                  }}>
+                    {t('radtrack-common_clear-button')}
+                  </button>
+                  <InfoTip text="Clear the current circle center while keeping the remaining draft settings." />
+                </div>
               </div>
-              <button class="warning" onclick={saveCircle} disabled={!draftCircleCenter}>
-                {t('radtrack-common_add_circle-button')}
-              </button>
+              <div class="control-with-info">
+                <button class="warning" onclick={saveCircle} disabled={!draftCircleCenter}>
+                  {t('radtrack-common_add_circle-button')}
+                </button>
+                <InfoTip text="Save the current circle as a new dataset exclusion area." />
+              </div>
             </div>
 
-            <button onclick={resetExcludeAreaDraft}>{t('radtrack-dataset_exclude_reset-button')}</button>
+            <div class="control-with-info">
+              <button onclick={resetExcludeAreaDraft}>{t('radtrack-dataset_exclude_reset-button')}</button>
+              <InfoTip text="Restore all unsaved exclusion-area fields to their defaults." />
+            </div>
           </div>
         </div>
       </details>
@@ -743,7 +852,10 @@
   {/if}
 
   <section class="panel">
-    <h2>{t('radtrack-dataset_exclude_areas-title')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-dataset_exclude_areas-title')}</h2>
+      <InfoTip text="Saved geographic rules available to map and export queries for this dataset." />
+    </div>
     <div class="table-wrap">
       <table>
         <thead>
@@ -776,9 +888,12 @@
                 <td>{area.applyByDefaultOnExport ? t('radtrack-common_yes-label') : t('radtrack-common_no-label')}</td>
                 <td>
                   {#if dataset.accessLevel === 'edit'}
-                    <button class="danger" onclick={() => removeExcludeArea(area.id, area.label)}>
-                      {t('radtrack-common_danger-delete-button')}
-                    </button>
+                    <span class="control-with-info">
+                      <button class="danger" onclick={() => removeExcludeArea(area.id, area.label)}>
+                        {t('radtrack-common_danger-delete-button')}
+                      </button>
+                      <InfoTip text="Permanently remove this geographic exclusion rule after confirmation." />
+                    </span>
                   {/if}
                 </td>
               </tr>

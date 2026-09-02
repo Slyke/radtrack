@@ -4,6 +4,7 @@
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
   import { uploadImport } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
 
   type ImportMode = 'json' | 'radiacode';
 
@@ -620,7 +621,12 @@
 
 <div class="page-header">
   <div>
-    <h1>{t(config.titleKey)}</h1>
+    <div class="title-with-info">
+      <h1>{t(config.titleKey)}</h1>
+      <InfoTip text={mode === 'json'
+        ? 'Import RadTrack JSON exports or backup archives into new or existing dataset structures.'
+        : 'Import native Radiacode track files and supported archives into RadTrack datasets.'} />
+    </div>
     <p class="muted">{t(config.descriptionKey)}</p>
   </div>
 </div>
@@ -628,7 +634,12 @@
 <section aria-busy={busy} class="panel">
   <div class="form-grid">
     <label>
-      <div class="muted">{t('radtrack-common_dataset_name-label')}</div>
+      <div class="muted field-title">
+        {t('radtrack-common_dataset_name-label')}
+        <InfoTip text={mode === 'json'
+          ? 'Optional fallback name used when the imported JSON does not define its own dataset name.'
+          : 'Optional destination dataset name. Bulk archives may supply separate names for each created dataset.'} />
+      </div>
       <input
         bind:value={datasetName}
         disabled={busy || datasetNameDerivedFromBulkFiles}
@@ -641,12 +652,18 @@
       {/if}
     </label>
     <label>
-      <div class="muted">{t('radtrack-common_description-label')}</div>
+      <div class="muted field-title">
+        {t('radtrack-common_description-label')}
+        <InfoTip text="Optional context stored with the imported dataset so other users know what the readings represent." />
+      </div>
       <textarea bind:value={description} disabled={busy} placeholder={t('radtrack-import_optional_description-placeholder')}></textarea>
     </label>
     {#if !description.trim() && selectedFiles.length}
       <div class="actions">
-        <button class="mid" disabled={busy} onclick={autofillDescription} type="button">{t('radtrack-import_autofill_description-button')}</button>
+        <div class="control-with-info">
+          <button class="mid" disabled={busy} onclick={autofillDescription} type="button">{t('radtrack-import_autofill_description-button')}</button>
+          <InfoTip text="Generate a short description from the selected filenames and import type." />
+        </div>
       </div>
     {/if}
     <div
@@ -671,7 +688,10 @@
       }}
       ondrop={handleDrop}
     >
-      <p>{t(config.dragDropLabelKey)}</p>
+      <p class="field-title">
+        {t(config.dragDropLabelKey)}
+        <InfoTip text="Drop files here or activate this area to open the file picker. Multiple compatible files may be selected together." />
+      </p>
       <input
         accept={config.accept}
         bind:this={fileInput}
@@ -685,7 +705,10 @@
       {#each selectedFiles as file, index}
         <span class="chip start file-chip">
           <span>{file.name}</span>
-          <button class="chip-action" disabled={busy} onclick={() => removeSelectedFile(index)} type="button">{t('radtrack-common_remove-button')}</button>
+          <span class="control-with-info">
+            <button class="chip-action" disabled={busy} onclick={() => removeSelectedFile(index)} type="button">{t('radtrack-common_remove-button')}</button>
+            <InfoTip text="Remove this file from the pending upload without changing the file on your device." />
+          </span>
         </span>
       {/each}
     </div>
@@ -701,15 +724,21 @@
       </div>
     {/if}
     <div class="actions import-submit-actions">
-      <button class="primary" disabled={!selectedFiles.length || busy} onclick={submit}>
-        {busy ? getBusyLabel() : t('radtrack-common_upload-button')}
-      </button>
+      <div class="control-with-info">
+        <button class="primary" disabled={!selectedFiles.length || busy} onclick={submit}>
+          {busy ? getBusyLabel() : t('radtrack-common_upload-button')}
+        </button>
+        <InfoTip text="Upload the selected files and begin server-side validation and import processing." />
+      </div>
       <div class="import-submit-options">
         {#if showSplitBulkArchivesOption}
           <label class="import-option-field">
             <input bind:checked={splitBulkArchivesIntoDatasets} disabled={busy} type="checkbox" />
             <span class="import-option-copy">
-              <span>{t('radtrack-import_split_bulk_datasets-label')}</span>
+              <span class="field-title">
+                {t('radtrack-import_split_bulk_datasets-label')}
+                <InfoTip text="Create a separate dataset for each dataset-like group found inside a bulk archive." />
+              </span>
               <span class="faint">{t('radtrack-import_split_bulk_datasets-help')}</span>
             </span>
           </label>
@@ -717,7 +746,10 @@
         <label class="import-option-field">
           <input bind:checked={advancedTrackDeduplication} disabled={busy} type="checkbox" />
           <span class="import-option-copy">
-            <span>{t('radtrack-import_advanced_deduplication-label')}</span>
+            <span class="field-title">
+              {t('radtrack-import_advanced_deduplication-label')}
+              <InfoTip text="Use deeper track-content comparison to avoid importing equivalent tracks that do not share a simple identifier." />
+            </span>
             <span class="faint">{t('radtrack-import_advanced_deduplication-help')}</span>
           </span>
         </label>
@@ -739,7 +771,10 @@
   ), 0)}
   <section class="panel import-summary-panel">
     <div class="page-header">
-      <h2>{t('radtrack-import_summary-title')}</h2>
+      <div class="title-with-info">
+        <h2>{t('radtrack-import_summary-title')}</h2>
+        <InfoTip text="Results for each created dataset and source file, including warnings retained with the import record." />
+      </div>
       {#if datasetResults.length === 1}
         <a href={`/datasets/${datasetResults[0].datasetId}`}>{t('radtrack-import_open_dataset-button')}</a>
       {/if}
@@ -760,7 +795,10 @@
           <section class="import-dataset-card">
             <div class="page-header">
               <div class="grid import-dataset-heading">
-                <h3>{datasetResult.datasetName}</h3>
+                <div class="title-with-info">
+                  <h3>{datasetResult.datasetName}</h3>
+                  <InfoTip text="Import outcome for this destination dataset." />
+                </div>
                 <p class="muted">{t('radtrack-common_dataset-label')} {datasetResult.datasetId}</p>
               </div>
               <a href={`/datasets/${datasetResult.datasetId}`}>{t('radtrack-import_open_dataset-button')}</a>
@@ -814,19 +852,25 @@
                     <p class="faint">{t('radtrack-import_warning_saved-note')}</p>
                   </div>
                   <div class="actions">
-                    <button
-                      class="mid"
-                      onclick={() => downloadWarningsText({ importResult: result!, datasetResult })}
-                      type="button"
-                    >
-                      {t('radtrack-import_warning_download_text-button')}
-                    </button>
-                    <button
-                      onclick={() => downloadWarningsJson({ importResult: result!, datasetResult })}
-                      type="button"
-                    >
-                      {t('radtrack-import_warning_download_json-button')}
-                    </button>
+                    <div class="control-with-info">
+                      <button
+                        class="mid"
+                        onclick={() => downloadWarningsText({ importResult: result!, datasetResult })}
+                        type="button"
+                      >
+                        {t('radtrack-import_warning_download_text-button')}
+                      </button>
+                      <InfoTip text="Download a readable text report of the warnings for this imported dataset." />
+                    </div>
+                    <div class="control-with-info">
+                      <button
+                        onclick={() => downloadWarningsJson({ importResult: result!, datasetResult })}
+                        type="button"
+                      >
+                        {t('radtrack-import_warning_download_json-button')}
+                      </button>
+                      <InfoTip text="Download the structured warning report as JSON for automation or detailed analysis." />
+                    </div>
                   </div>
                 </div>
 

@@ -3,6 +3,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { apiFetch } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { localeStore, translateMessage } from '$lib/i18n';
   import { sessionStore } from '$lib/stores/session';
 
@@ -94,7 +95,10 @@
 
 <div class="page-header">
   <div>
-    <h1>{t('radtrack-users_title')}</h1>
+    <div class="title-with-info">
+      <h1>{t('radtrack-users_title')}</h1>
+      <InfoTip text="Review RadTrack accounts and, when authorized, create accounts or manage their access state." />
+    </div>
     <p class="muted">{t('radtrack-users_description')}</p>
   </div>
 </div>
@@ -107,30 +111,60 @@
 
 {#if $sessionStore.user?.role === 'admin'}
   <section class="panel">
-    <h2>{t('radtrack-users_create-title')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-users_create-title')}</h2>
+      <InfoTip text="Create a local password-authenticated user and assign its initial application role." />
+    </div>
     <div class="form-grid">
-      <input bind:value={createForm.username} placeholder={t('radtrack-common_username-label')} />
-      <select bind:value={createForm.role}>
-        <option value="view_only">view_only</option>
-        <option value="standard">standard</option>
-        <option value="moderator">moderator</option>
-        <option value="admin">admin</option>
-      </select>
-      <input bind:value={createForm.password} placeholder={t('radtrack-users_optional_password-placeholder')} type="password" />
-      <button class="primary" onclick={createUser}>{t('radtrack-users_create-title')}</button>
+      <label>
+        <span class="muted field-title">
+          {t('radtrack-common_username-label')}
+          <InfoTip text="The unique local name the person will use to sign in." />
+        </span>
+        <input bind:value={createForm.username} placeholder={t('radtrack-common_username-label')} />
+      </label>
+      <label>
+        <span class="muted field-title">
+          {t('radtrack-common_role-label')}
+          <InfoTip text="Controls the account’s baseline permissions, from read-only access through full administration." />
+        </span>
+        <select bind:value={createForm.role}>
+          <option value="view_only">view_only</option>
+          <option value="standard">standard</option>
+          <option value="moderator">moderator</option>
+          <option value="admin">admin</option>
+        </select>
+      </label>
+      <label>
+        <span class="muted field-title">
+          {t('radtrack-common_password-label')}
+          <InfoTip text="Optional initial password. If omitted, RadTrack generates one for you to deliver securely." />
+        </span>
+        <input bind:value={createForm.password} placeholder={t('radtrack-users_optional_password-placeholder')} type="password" />
+      </label>
+      <div class="control-with-info">
+        <button class="primary" onclick={createUser}>{t('radtrack-users_create-title')}</button>
+        <InfoTip text="Create the account with the username, role, and password shown above." />
+      </div>
     </div>
   </section>
 {/if}
 
 {#if resetPasswordResult}
   <section class="panel">
-    <h2>{t('radtrack-users_generated_password-title')}</h2>
+    <div class="title-with-info">
+      <h2>{t('radtrack-users_generated_password-title')}</h2>
+      <InfoTip text="This temporary credential is shown so it can be delivered securely to the user; they will be required to replace it." />
+    </div>
     <code>{resetPasswordResult}</code>
   </section>
 {/if}
 
 <section class="panel">
-  <h2>{t('radtrack-layout_nav-users-label')}</h2>
+  <div class="title-with-info">
+    <h2>{t('radtrack-layout_nav-users-label')}</h2>
+    <InfoTip text="All known users, their roles, account flags, linked identities, and available account actions." />
+  </div>
   <div class="table-wrap">
     <table>
       <thead>
@@ -169,15 +203,21 @@
             </td>
             <td>
               <div class="actions">
-                <button
-                  class="warning"
-                  disabled={!canToggleDisabled(user)}
-                  onclick={() => toggleDisabled(user)}
-                  title={canToggleDisabled(user) ? undefined : getDisableProtectionMessage(user)}
-                >
-                  {user.isDisabled ? t('radtrack-users_enable-button') : t('radtrack-users_disable-button')}
-                </button>
-                <button class="danger" onclick={() => resetPassword(user.id)}>{t('radtrack-users_reset_password-button')}</button>
+                <div class="control-with-info">
+                  <button
+                    class="warning"
+                    disabled={!canToggleDisabled(user)}
+                    onclick={() => toggleDisabled(user)}
+                    title={canToggleDisabled(user) ? undefined : getDisableProtectionMessage(user)}
+                  >
+                    {user.isDisabled ? t('radtrack-users_enable-button') : t('radtrack-users_disable-button')}
+                  </button>
+                  <InfoTip text={user.isDisabled ? 'Allow this local account to authenticate again.' : 'Prevent this local account from authenticating until it is re-enabled.'} />
+                </div>
+                <div class="control-with-info">
+                  <button class="danger" onclick={() => resetPassword(user.id)}>{t('radtrack-users_reset_password-button')}</button>
+                  <InfoTip text="Replace this user’s local password with a generated temporary password and require a change at next sign-in." />
+                </div>
               </div>
             </td>
           </tr>

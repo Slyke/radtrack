@@ -6,6 +6,7 @@
   import { page } from '$app/stores';
   import { onMount } from 'svelte';
   import { ApiError, apiFetch, resolveApiPath } from '$lib/api/client';
+  import InfoTip from '$lib/components/InfoTip.svelte';
   import { formatDateTime, localeStore, translateMessage } from '$lib/i18n';
   import {
     coreMetricFields,
@@ -656,17 +657,29 @@
 {:else}
   <div class="detail-page-header">
     <div class="page-header">
-      <h1>{datalog.datalogName ?? t('radtrack-track_title')}</h1>
+      <div class="title-with-info">
+        <h1>{datalog.datalogName ?? t('radtrack-track_title')}</h1>
+        <InfoTip text="Inspect and manage this track’s metadata, measurement fields, ingest credentials, sharing, and individual readings." />
+      </div>
       <div class="actions">
-        <a class="button-link" href={`/datasets/${datalog.dataset.id}`}>{t('radtrack-common_back-button')}</a>
+        <div class="control-with-info">
+          <a class="button-link" href={`/datasets/${datalog.dataset.id}`}>{t('radtrack-common_back-button')}</a>
+          <InfoTip text="Return to the dataset that contains this track." />
+        </div>
       </div>
     </div>
     <div class="page-header detail-page-header-meta-row">
       <p class="muted detail-page-header-description">{t('radtrack-track_description')}</p>
       <div class="actions">
-        <a class="button-link" href={`/datasets/${datalog.dataset.id}`}>{t('radtrack-common_open_dataset-button')}</a>
+        <div class="control-with-info">
+          <a class="button-link" href={`/datasets/${datalog.dataset.id}`}>{t('radtrack-common_open_dataset-button')}</a>
+          <InfoTip text="Open the containing dataset’s tracks, fields, sharing, and exclusion rules." />
+        </div>
         {#if datalog.accessLevel === 'edit'}
-          <button class="danger" disabled={deletingDatalog} onclick={deleteDatalog}>{t('radtrack-common_danger-delete-button')}</button>
+          <div class="control-with-info">
+            <button class="danger" disabled={deletingDatalog} onclick={deleteDatalog}>{t('radtrack-common_danger-delete-button')}</button>
+            <InfoTip text="Permanently delete this track and all readings it owns after confirmation." />
+          </div>
         {/if}
       </div>
     </div>
@@ -690,33 +703,48 @@
       {#if datalog.accessLevel === 'edit'}
         <div class="form-grid">
           <label>
-            <div class="muted">{t('radtrack-track_name-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-track_name-label')}
+              <InfoTip text="The display name used for this track throughout RadTrack." />
+            </div>
             <input bind:this={datalogNameInput} bind:value={metadataForm.name} />
           </label>
 
             <div class="form-grid field-block">
               <div class="field-block-header">
                 <div>
-                  <div class="muted">{t('radtrack-common_metric-label')}</div>
+                  <div class="muted field-title">
+                    {t('radtrack-common_metric-label')}
+                    <InfoTip text="Define the track properties RadTrack can show in popups or use as map metrics." />
+                  </div>
                 </div>
               </div>
 
               <div class="supported-field-toolbar-row">
                 <div class="actions supported-field-toolbar-primary">
-                  <button type="button" disabled={!autodetectMissingSupportedFields.length} onclick={autodetectSupportedFieldDrafts}>{t('radtrack-common_autodetect-button')}</button>
-                  <button type="button" onclick={addSupportedFieldDraft}>{t('radtrack-common_create-button')}</button>
+                  <div class="control-with-info">
+                    <button type="button" disabled={!autodetectMissingSupportedFields.length} onclick={autodetectSupportedFieldDrafts}>{t('radtrack-common_autodetect-button')}</button>
+                    <InfoTip text="Add definitions for recognized properties present in the track but not yet listed here." />
+                  </div>
+                  <div class="control-with-info">
+                    <button type="button" onclick={addSupportedFieldDraft}>{t('radtrack-common_create-button')}</button>
+                    <InfoTip text="Add a blank supported-field definition for a custom property." />
+                  </div>
                 </div>
                 <div class="actions supported-field-toolbar-secondary">
-                  <button
-                    aria-expanded={showPropInfo}
-                    class:mid={showPropInfo}
-                    type="button"
-                    onclick={() => {
-                      showPropInfo = !showPropInfo;
-                    }}
-                  >
-                    {t('radtrack-track_prop_info-button')}
-                  </button>
+                  <div class="control-with-info">
+                    <button
+                      aria-expanded={showPropInfo}
+                      class:mid={showPropInfo}
+                      type="button"
+                      onclick={() => {
+                        showPropInfo = !showPropInfo;
+                      }}
+                    >
+                      {t('radtrack-track_prop_info-button')}
+                    </button>
+                    <InfoTip text="Show or hide the reference list of special property keys and their meanings." />
+                  </div>
                 </div>
               </div>
 
@@ -753,7 +781,10 @@
                 {#each supportedFieldDrafts as field, index}
                   <div class="supported-field-row">
                     <label>
-                      <div class="muted">propKey</div>
+                      <div class="muted field-title">
+                        propKey
+                        <InfoTip text="Stable case-sensitive property key used in readings, API payloads, map filters, and exports." />
+                      </div>
                       <input
                         bind:value={field.propKey}
                         onblur={() => normalizeSupportedFieldDraftKey(index)}
@@ -761,11 +792,17 @@
                       />
                     </label>
                     <label>
-                      <div class="muted">{t('radtrack-common_label-label')}</div>
+                      <div class="muted field-title">
+                        {t('radtrack-common_label-label')}
+                        <InfoTip text="Human-readable name shown beside this property in the interface." />
+                      </div>
                       <input bind:value={field.displayName} placeholder="Dose Rate" />
                     </label>
                     <label>
-                      <div class="muted">{t('radtrack-common_type-label')}</div>
+                      <div class="muted field-title">
+                        {t('radtrack-common_type-label')}
+                        <InfoTip text="How values should be interpreted: numeric measurement, timestamp, or text." />
+                      </div>
                       <select bind:value={field.valueType}>
                         <option value="number">Number</option>
                         <option value="time">Time</option>
@@ -775,17 +812,26 @@
                     <div class="supported-field-toggle-group">
                       <label class="checkbox-field supported-field-toggle">
                         <input bind:checked={field.popupDefaultEnabled} type="checkbox" />
-                        <span>{t('radtrack-track_popup_default-label')}</span>
+                        <span class="field-title">
+                          {t('radtrack-track_popup_default-label')}
+                          <InfoTip text="Show this property by default in map reading popups." />
+                        </span>
                       </label>
                       {#if field.valueType !== 'string'}
                         <label class="checkbox-field supported-field-toggle">
                           <input bind:checked={field.metricListEnabled} type="checkbox" />
-                          <span>{t('radtrack-track_metric_list_enabled-label')}</span>
+                          <span class="field-title">
+                            {t('radtrack-track_metric_list_enabled-label')}
+                            <InfoTip text="Allow this numeric or time property to be selected as the map metric." />
+                          </span>
                         </label>
                       {/if}
                     </div>
                     <div class="supported-field-actions">
-                      <button class="danger" type="button" onclick={() => removeSupportedFieldDraft(index)}>{t('radtrack-common_remove-button')}</button>
+                      <div class="control-with-info">
+                        <button class="danger" type="button" onclick={() => removeSupportedFieldDraft(index)}>{t('radtrack-common_remove-button')}</button>
+                        <InfoTip text="Remove this property definition from the draft. Save metadata to persist the change." />
+                      </div>
                     </div>
                   </div>
                 {/each}
@@ -800,9 +846,15 @@
           {/if}
 
           <div class="actions">
-            <button class="primary" disabled={savingMetadata} onclick={saveMetadata}>{t('radtrack-track_update_name-button')}</button>
+            <div class="control-with-info">
+              <button class="primary" disabled={savingMetadata} onclick={saveMetadata}>{t('radtrack-track_update_name-button')}</button>
+              <InfoTip text="Save the track name and supported-field definitions." />
+            </div>
             {#if datalog.canRestoreOriginal}
-              <button disabled={restoringOriginal} onclick={restoreOriginal}>{t('radtrack-track_restore_original-button')}</button>
+              <div class="control-with-info">
+                <button disabled={restoringOriginal} onclick={restoreOriginal}>{t('radtrack-track_restore_original-button')}</button>
+                <InfoTip text="Reparse the stored original file and replace edits with the imported metadata and readings." />
+              </div>
             {/if}
           </div>
         </div>
@@ -838,22 +890,34 @@
           </div>
 
           <div>
-            <div class="muted">{t('radtrack-track_endpoint-title')}</div>
+            <div class="muted field-title">
+              {t('radtrack-track_endpoint-title')}
+              <InfoTip text="Send live reading JSON to this URL using an active ingest key in the named request header." />
+            </div>
             <code class="endpoint-value">{endpointUrl}</code>
           </div>
 
           {#if datalog.accessLevel === 'edit'}
             <div class="grid cols-3">
               <label>
-                <div class="muted">{t('radtrack-track_key_label-placeholder')}</div>
+                <div class="muted field-title">
+                  {t('radtrack-track_key_label-placeholder')}
+                  <InfoTip text="A recognizable name for the device or integration that will use this key." />
+                </div>
                 <input bind:value={keyForm.label} placeholder={t('radtrack-track_key_label-placeholder')} />
               </label>
               <label>
-                <div class="muted">{t('radtrack-track_key_notes-placeholder')}</div>
+                <div class="muted field-title">
+                  {t('radtrack-track_key_notes-placeholder')}
+                  <InfoTip text="Optional operational context such as owner, location, or rotation schedule." />
+                </div>
                 <input bind:value={keyForm.notes} placeholder={t('radtrack-track_key_notes-placeholder')} />
               </label>
               <div class="supported-field-actions">
-                <button class="primary" onclick={createIngestKey}>{t('radtrack-track_create_key-button')}</button>
+                <div class="control-with-info">
+                  <button class="primary" onclick={createIngestKey}>{t('radtrack-track_create_key-button')}</button>
+                  <InfoTip text="Generate a new secret that can append readings only to this live track." />
+                </div>
               </div>
             </div>
           {/if}
@@ -868,7 +932,10 @@
 
           <details class="details-accordion field-block">
             <summary>
-              <span>{t('radtrack-track_example_request-title')}</span>
+              <span class="field-title">
+                {t('radtrack-track_example_request-title')}
+                <InfoTip text="Expand a ready-to-adapt curl command and sample JSON payload for this live track." />
+              </span>
               <span class="exclude-editor-summary">
                 <span aria-hidden="true" class="exclude-editor-icon"></span>
               </span>
@@ -912,8 +979,14 @@
                       {#if datalog.accessLevel === 'edit'}
                         <td>
                           <div class="actions">
-                            <button disabled={!key.active} onclick={() => rotateIngestKey(key.id)}>{t('radtrack-track_rotate-button')}</button>
-                            <button class="danger" disabled={!key.active} onclick={() => revokeIngestKey(key.id)}>{t('radtrack-track_revoke-button')}</button>
+                            <div class="control-with-info">
+                              <button disabled={!key.active} onclick={() => rotateIngestKey(key.id)}>{t('radtrack-track_rotate-button')}</button>
+                              <InfoTip text="Revoke this secret and generate a replacement with the same label and notes." />
+                            </div>
+                            <div class="control-with-info">
+                              <button class="danger" disabled={!key.active} onclick={() => revokeIngestKey(key.id)}>{t('radtrack-track_revoke-button')}</button>
+                              <InfoTip text="Immediately stop this secret from accepting new readings." />
+                            </div>
                           </div>
                         </td>
                       {/if}
@@ -932,7 +1005,10 @@
         <div class="imported-datalog-note">
           <p class="muted">{t('radtrack-track_not_live')}</p>
           {#if datalog.originalFileDownloadPath}
-            <a class="button-link mid" href={originalFileDownloadUrl}>{t('radtrack-track_download_original-button')}</a>
+            <span class="control-with-info">
+              <a class="button-link mid" href={originalFileDownloadUrl}>{t('radtrack-track_download_original-button')}</a>
+              <InfoTip text="Download the unchanged source artifact stored when this track was imported." />
+            </span>
           {/if}
         </div>
       {/if}
@@ -942,7 +1018,10 @@
   <section class="panel datalog-panel">
     <details class="sharing-accordion">
       <summary>
-        <span>{t('radtrack-common_sharing-label')}</span>
+        <span class="field-title">
+          {t('radtrack-common_sharing-label')}
+          <InfoTip text="Grant direct access to this track without granting access to every track in its dataset." />
+        </span>
         <span class="exclude-editor-summary">
           <span class="chip subtle">{datalog.shares?.length ?? 0}</span>
           <span aria-hidden="true" class="exclude-editor-icon"></span>
@@ -954,18 +1033,33 @@
 
         {#if datalog.accessLevel === 'edit'}
           <div class="form-grid sharing-controls">
-            <select bind:value={shareForm.targetUserId}>
-              <option value="">{t('radtrack-common_select_user-option')}</option>
-              {#each shareTargets as target}
-                <option value={target.id}>{target.username}</option>
-              {/each}
-            </select>
-            <select bind:value={shareForm.accessLevel}>
-              <option value="view">{t('radtrack-common_view-label')}</option>
-              <option value="edit">{t('radtrack-common_edit-label')}</option>
-            </select>
+            <label>
+              <span class="muted field-title">
+                {t('radtrack-common_user-label')}
+                <InfoTip text="Choose the user who should receive direct access to this track." />
+              </span>
+              <select bind:value={shareForm.targetUserId}>
+                <option value="">{t('radtrack-common_select_user-option')}</option>
+                {#each shareTargets as target}
+                  <option value={target.id}>{target.username}</option>
+                {/each}
+              </select>
+            </label>
+            <label>
+              <span class="muted field-title">
+                {t('radtrack-common_access-label')}
+                <InfoTip text="View permits reading the track; edit also permits metadata, key, share, and reading changes." />
+              </span>
+              <select bind:value={shareForm.accessLevel}>
+                <option value="view">{t('radtrack-common_view-label')}</option>
+                <option value="edit">{t('radtrack-common_edit-label')}</option>
+              </select>
+            </label>
             <div class="actions">
-              <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
+              <div class="control-with-info">
+                <button class="primary" onclick={saveShare}>{t('radtrack-common_share-button')}</button>
+                <InfoTip text="Create or update this user’s direct access grant to the track." />
+              </div>
             </div>
           </div>
         {/if}
@@ -988,7 +1082,12 @@
                     <td>{share.username}</td>
                     <td>{share.accessLevel}</td>
                     {#if datalog.accessLevel === 'edit'}
-                      <td><button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button></td>
+                      <td>
+                        <span class="control-with-info">
+                          <button class="danger" onclick={() => removeShare(share.id)}>{t('radtrack-common_remove-button')}</button>
+                          <InfoTip text="Revoke this direct track share. Dataset-level or administrative access is unaffected." />
+                        </span>
+                      </td>
                     {/if}
                   </tr>
                 {/each}
@@ -1007,7 +1106,10 @@
   <section class="panel datalog-panel">
     <div class="page-header compact-header">
       <div>
-        <h2>{t('radtrack-track_recent_points-title')}</h2>
+        <div class="title-with-info">
+          <h2>{t('radtrack-track_recent_points-title')}</h2>
+          <InfoTip text="Browse the track’s readings in pages of 100 and edit individual values when you have edit access." />
+        </div>
         <p class="muted">{t('radtrack-track_points_range-label', {
           start: readingPageStart,
           end: readingPageEnd,
@@ -1016,18 +1118,24 @@
       </div>
 
       <div class="actions">
-        <button
-          disabled={(datalog.readingsPage?.offset ?? 0) <= 0}
-          onclick={() => loadDatalog({ offset: Math.max(0, (datalog.readingsPage?.offset ?? 0) - readingPageLimit) })}
-        >
-          {t('radtrack-common_previous-label')}
-        </button>
-        <button
-          disabled={(datalog.readingsPage?.offset ?? 0) + readingPageLimit >= (datalog.readingsPage?.totalCount ?? 0)}
-          onclick={() => loadDatalog({ offset: (datalog.readingsPage?.offset ?? 0) + readingPageLimit })}
-        >
-          {t('radtrack-common_next-label')}
-        </button>
+        <div class="control-with-info">
+          <button
+            disabled={(datalog.readingsPage?.offset ?? 0) <= 0}
+            onclick={() => loadDatalog({ offset: Math.max(0, (datalog.readingsPage?.offset ?? 0) - readingPageLimit) })}
+          >
+            {t('radtrack-common_previous-label')}
+          </button>
+          <InfoTip text="Load the previous page of readings." />
+        </div>
+        <div class="control-with-info">
+          <button
+            disabled={(datalog.readingsPage?.offset ?? 0) + readingPageLimit >= (datalog.readingsPage?.totalCount ?? 0)}
+            onclick={() => loadDatalog({ offset: (datalog.readingsPage?.offset ?? 0) + readingPageLimit })}
+          >
+            {t('radtrack-common_next-label')}
+          </button>
+          <InfoTip text="Load the next page of readings." />
+        </div>
       </div>
     </div>
 
@@ -1035,27 +1143,45 @@
       <div class="form-grid field-block">
         <div class="grid cols-3">
           <label>
-            <div class="muted">{t('radtrack-common_occurred_at-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_occurred_at-label')}
+              <InfoTip text="Timestamp when the measurement occurred. Use an ISO 8601 date and time." />
+            </div>
             <input bind:value={readingForm.occurredAt} placeholder="2026-04-17T19:15:00.000Z" />
           </label>
           <label>
-            <div class="muted">{t('radtrack-common_latitude-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_latitude-label')}
+              <InfoTip text="Reading latitude in decimal degrees from -90 through 90." />
+            </div>
             <input bind:value={readingForm.latitude} step="any" type="number" />
           </label>
           <label>
-            <div class="muted">{t('radtrack-common_longitude-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_longitude-label')}
+              <InfoTip text="Reading longitude in decimal degrees from -180 through 180." />
+            </div>
             <input bind:value={readingForm.longitude} step="any" type="number" />
           </label>
           <label>
-            <div class="muted">{t('radtrack-common_altitude-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_altitude-label')}
+              <InfoTip text="Optional altitude in meters associated with the reading." />
+            </div>
             <input bind:value={readingForm.altitudeMeters} step="any" type="number" />
           </label>
           <label>
-            <div class="muted">{t('radtrack-common_accuracy-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_accuracy-label')}
+              <InfoTip text="Optional location accuracy value supplied by the source device." />
+            </div>
             <input bind:value={readingForm.accuracy} step="any" type="number" />
           </label>
           <label class="span-3">
-            <div class="muted">{t('radtrack-common_comment-label')}</div>
+            <div class="muted field-title">
+              {t('radtrack-common_comment-label')}
+              <InfoTip text="Optional free-text note stored with this reading." />
+            </div>
             <input bind:value={readingForm.comment} />
           </label>
         </div>
@@ -1064,7 +1190,10 @@
           <div class="grid cols-3">
             {#each numericMeasurementFields as field}
               <label>
-                <div class="muted">{field.displayName}</div>
+                <div class="muted field-title">
+                  {field.displayName}
+                  <InfoTip text={`Numeric value for the ${field.propKey} measurement property.`} />
+                </div>
                 <input bind:value={readingForm.measurements[field.propKey]} step="any" type="number" />
               </label>
             {/each}
@@ -1072,8 +1201,14 @@
         {/if}
 
         <div class="actions">
-          <button class="primary" disabled={savingReading} onclick={saveReading}>{t('radtrack-common_save-button')}</button>
-          <button onclick={resetReadingForm}>{t('radtrack-common_cancel-button')}</button>
+          <div class="control-with-info">
+            <button class="primary" disabled={savingReading} onclick={saveReading}>{t('radtrack-common_save-button')}</button>
+            <InfoTip text="Validate and save the edited reading values." />
+          </div>
+          <div class="control-with-info">
+            <button onclick={resetReadingForm}>{t('radtrack-common_cancel-button')}</button>
+            <InfoTip text="Discard unsaved reading edits and close the editor." />
+          </div>
         </div>
       </div>
     {/if}
@@ -1113,7 +1248,10 @@
                 <td>{reading.comment || t('radtrack-common_none')}</td>
                 {#if datalog.accessLevel === 'edit'}
                   <td>
-                    <button onclick={() => startEditingReading(reading)}>{t('radtrack-common_edit-label')}</button>
+                    <span class="control-with-info">
+                      <button onclick={() => startEditingReading(reading)}>{t('radtrack-common_edit-label')}</button>
+                      <InfoTip text="Load this reading into the editor above." />
+                    </span>
                   </td>
                 {/if}
               </tr>
